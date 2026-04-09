@@ -84,45 +84,9 @@ BASE_HTML = """<!doctype html>
       font-size: .9rem;
       margin-bottom: 12px;
     }
-    .pair-search {
-      margin-bottom: 12px;
-    }
-    .pair-list {
-      max-height: 220px;
-      overflow: auto;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: rgba(8,16,31,.72);
-      padding: 6px;
-      display: grid;
-      gap: 6px;
-    }
-    .pair-option {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: rgba(19,33,59,.6);
-      border: 1px solid transparent;
-      cursor: pointer;
-      font-size: .88rem;
-    }
-    .pair-option.active {
-      border-color: rgba(99,102,241,.7);
-      background: rgba(99,102,241,.18);
-    }
-    .pair-option span { pointer-events: none; }
-    .pair-empty {
-      padding: 12px;
-      border-radius: 10px;
-      background: rgba(19,33,59,.4);
-      color: var(--muted);
-      font-size: .82rem;
-    }
-    .hidden {
-      display: none;
+    .select {
+      width: 100%; background: rgba(2,6,23,.9); color: var(--text); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin-bottom: 12px;
     }
     .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
     button {
@@ -203,30 +167,6 @@ BASE_HTML = """<!doctype html>
     setTimeout(() => {
       window.location.reload();
     }, 60000);
-
-    function filterPairs() {
-      const input = document.getElementById('pair-search');
-      const items = document.querySelectorAll('[data-pair-option]');
-      if (!input) return;
-      const query = input.value.trim().toUpperCase();
-      let visible = 0;
-      items.forEach((item) => {
-        const pair = item.getAttribute('data-pair-option') || '';
-        const match = !query || pair.includes(query);
-        item.classList.toggle('hidden', !match);
-        if (match) visible += 1;
-      });
-      const empty = document.getElementById('pair-empty');
-      if (empty) empty.classList.toggle('hidden', visible > 0);
-    }
-
-    function choosePair(pair) {
-      const input = document.getElementById('selected_instrument');
-      if (input) input.value = pair;
-      document.querySelectorAll('[data-pair-option]').forEach((item) => {
-        item.classList.toggle('active', item.getAttribute('data-pair-option') === pair);
-      });
-    }
   </script>
 </body>
 </html>
@@ -581,16 +521,16 @@ def dashboard():
               <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
 
               <div class=\"label\">Pair</div>
-              <input id=\"selected_instrument\" name=\"selected_instrument\" value=\"{{ active_pair }}\" placeholder=\"Enter API key, account ID, then load/select a pair\" style=\"text-transform:uppercase;\" />
-              <input id=\"pair-search\" class=\"pair-search\" type=\"text\" placeholder=\"Filter pairs\" oninput=\"filterPairs()\" />
-              <div class=\"pair-list\">
-                {% for instrument in instruments %}
-                  <div class=\"pair-option {% if instrument == active_pair %}active{% endif %}\" data-pair-option=\"{{ instrument }}\" onclick=\"choosePair('{{ instrument }}')\">
-                    <span>{{ instrument }}</span>
-                  </div>
-                {% endfor %}
-                <div id=\"pair-empty\" class=\"pair-empty {% if instruments %}hidden{% endif %}\">No pairs loaded yet. Submit valid Oanda credentials first.</div>
-              </div>
+              <select class=\"select\" name=\"selected_instrument\">
+                {% if instruments %}
+                  <option value=\"\">Select a pair</option>
+                  {% for instrument in instruments %}
+                    <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option value=\"\" selected>Submit Oanda credentials to load pairs</option>
+                {% endif %}
+              </select>
 
               <div class=\"btnrow\">
                 <button type=\"submit\">Submit</button>
