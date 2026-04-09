@@ -59,7 +59,10 @@ BASE_HTML = """<!doctype html>
       background: linear-gradient(180deg, #040915 0%, #07111f 100%);
       color: var(--text);
     }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; }
+    html, body {
+      min-height: 100%;
+    }
+    .wrap { width: 100%; max-width: none; margin: 0; padding: 24px 28px 40px; min-height: 100vh; }
     .hero, .card {
       background: linear-gradient(180deg, rgba(15,27,49,.96), rgba(11,21,39,.96));
       border: 1px solid var(--border);
@@ -69,7 +72,7 @@ BASE_HTML = """<!doctype html>
     .hero { padding: 22px; margin-bottom: 16px; }
     .hero h1 { margin: 0 0 8px; font-size: 1.4rem; }
     .hero p { margin: 0; color: var(--muted); line-height: 1.5; }
-    .grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+    .grid { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 16px; align-items: start; }
     .card { padding: 18px; }
     .title { margin: 0 0 14px; font-size: .95rem; font-weight: 800; }
     .label { font-size: .74rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .08em; }
@@ -89,6 +92,34 @@ BASE_HTML = """<!doctype html>
       border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin-bottom: 12px;
     }
     .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
+    .favorites {
+      margin-top: 14px;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+    }
+    .favorites-list {
+      display: grid;
+      gap: 8px;
+      max-height: 220px;
+      overflow: auto;
+      margin-top: 10px;
+    }
+    .favorite-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(19,33,59,.55);
+      border: 1px solid var(--border);
+      font-size: .86rem;
+    }
+    .favorite-row input[type='checkbox'] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+    }
     button {
       border: none;
       border-radius: 12px;
@@ -156,6 +187,7 @@ BASE_HTML = """<!doctype html>
     .flash.success { background: rgba(34,197,94,.12); color: #bbf7d0; }
     .flash.error { background: rgba(239,68,68,.12); color: #fecaca; }
     @media (max-width: 900px) {
+      .wrap { padding: 16px; }
       .grid { grid-template-columns: 1fr; }
       .stats, .signal-grid { grid-template-columns: 1fr; }
     }
@@ -190,6 +222,7 @@ def default_control() -> dict[str, Any]:
     return {
         "account_mode": "demo",
         "selected_instrument": "",
+        "favorites": [],
         "api_key": "",
         "account_id": "",
         "status": "idle",
@@ -390,6 +423,7 @@ def submit_controls():
     control = load_control()
     control["account_mode"] = "live" if request.form.get("account_mode") == "live" else "demo"
     selected_instrument = request.form.get("selected_instrument", "").strip()
+    control["favorites"] = request.form.getlist("favorite_instruments")
     if selected_instrument:
         control["selected_instrument"] = selected_instrument
     api_key = request.form.get("api_key", "").strip().strip("'\"")
@@ -486,8 +520,11 @@ def dashboard():
         except Exception as exc:
             instrument_error = str(exc)
     active_pair = control.get("selected_instrument", "")
+    favorites = control.get("favorites", [])
     if instruments and active_pair and active_pair not in instruments:
         instruments = [active_pair] + [instrument for instrument in instruments if instrument != active_pair]
+    favorite_names = [name for name in favorites if name in instruments]
+    remaining_instruments = [name for name in instruments if name not in favorite_names]
 
     active_signals = [s for s in signals if s.get("pair") == active_pair]
     latest_signal = active_signals[0] if active_signals else None
@@ -524,9 +561,20 @@ def dashboard():
               <select class=\"select\" name=\"selected_instrument\">
                 {% if instruments %}
                   <option value=\"\">Select a pair</option>
-                  {% for instrument in instruments %}
-                    <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
-                  {% endfor %}
+                  {% if favorite_names %}
+                    <optgroup label=\"Favorites\">
+                      {% for instrument in favorite_names %}
+                        <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>★ {{ instrument }}</option>
+                      {% endfor %}
+                    </optgroup>
+                  {% endif %}
+                  {% if remaining_instruments %}
+                    <optgroup label=\"All Oanda Pairs\">
+                      {% for instrument in remaining_instruments %}
+                        <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
+                      {% endfor %}
+                    </optgroup>
+                  {% endif %}
                 {% else %}
                   <option value=\"\" selected>Submit Oanda credentials to load pairs</option>
                 {% endif %}
@@ -537,6 +585,21 @@ def dashboard():
               </div>
               {% if not instruments and not instrument_error and not control.api_key %}
                 <div class=\"help\">Enter your Oanda API key and account ID, then click Submit to load available pairs.</div>
+              {% endif %}
+
+              {% if instruments %}
+              <div class=\"favorites\">
+                <div class=\"label\">Favorites</div>
+                <div class=\"help\">Save your most-used pairs so they stay pinned at the top like your other bot.</div>
+                <div class=\"favorites-list\">
+                  {% for instrument in instruments %}
+                    <label class=\"favorite-row\">
+                      <span>{{ instrument }}</span>
+                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ instrument }}\" {% if instrument in favorites %}checked{% endif %} />
+                    </label>
+                  {% endfor %}
+                </div>
+              </div>
               {% endif %}
             </form>
 
@@ -607,6 +670,9 @@ def dashboard():
         instrument_error=instrument_error,
         status_class=status_class,
         status_label=status_label,
+        favorites=favorites,
+        favorite_names=favorite_names,
+        remaining_instruments=remaining_instruments,
     )
     return render_template_string(BASE_HTML, body=body)
 
