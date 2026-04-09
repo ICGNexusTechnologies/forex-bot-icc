@@ -1,7 +1,7 @@
 {
   "account_mode": "demo",
-  "selected_instrument": "EUR_USD",
-  "api_key": "",
-  "account_id": "",
+  "selected_instrument": "",
+  "api_key": "ef3ff3dc8623edda46a1f7b2f8f3b979-7965439fc3b656a6855d90e0e2cdc713",
+  "account_id": "101-001-30510930-001",
   "status": "idle"
 }
