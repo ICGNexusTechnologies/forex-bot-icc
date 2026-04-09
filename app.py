@@ -16,6 +16,7 @@ CONTROL_FILE = BOT_ROOT / "dashboard_control.json"
 SIGNALS_FILE = BOT_ROOT / "signals.json"
 STATE_FILE = BOT_ROOT / "state.json"
 CREDS_FILE = BOT_ROOT / ".oanda_env"
+DEFAULT_ALERT_PHONE = "4015591113"
 PIP_OVERRIDES = {
     "JPY": 0.01,
 }
@@ -325,6 +326,9 @@ def default_control() -> dict[str, Any]:
         "api_key": "",
         "account_id": "",
         "status": "idle",
+        "notify_enabled": True,
+        "alert_phone": DEFAULT_ALERT_PHONE,
+        "alert_service": "auto",
     }
 
 
@@ -408,6 +412,38 @@ def format_display_time(value: str | None) -> str:
         return dt.astimezone().strftime("%b %d, %Y %I:%M:%S %p")
     except Exception:
         return value
+
+
+def build_signal_text(signal: dict[str, Any]) -> str:
+    return (
+        f"ICC signal: {signal.get('pair', 'Unknown')} {signal.get('side', '')}\n"
+        f"Entry: {signal.get('entry', '—')}\n"
+        f"Stop Loss: {signal.get('stop_loss', '—')}\n"
+        f"Take Profit: {signal.get('take_profit', '—')}"
+    )
+
+
+def send_signal_text(control: dict[str, Any], signal: dict[str, Any]) -> None:
+    if not control.get("notify_enabled"):
+        return
+    alert_phone = (control.get("alert_phone") or "").strip()
+    if not alert_phone:
+        return
+    alert_service = (control.get("alert_service") or "auto").strip() or "auto"
+    subprocess.run(
+        [
+            "/opt/homebrew/bin/imsg",
+            "send",
+            "--to",
+            alert_phone,
+            "--text",
+            build_signal_text(signal),
+            "--service",
+            alert_service,
+        ],
+        check=True,
+        timeout=30,
+    )
 
 
 def find_origin_level(candles: list[dict[str, Any]], breakout_index: int, side: str) -> float | None:
@@ -538,6 +574,9 @@ def submit_controls():
         selected_instrument = selected_instrument[2:]
     if selected_instrument:
         control["selected_instrument"] = selected_instrument
+    control["notify_enabled"] = request.form.get("notify_enabled") == "on"
+    control["alert_phone"] = request.form.get("alert_phone", control.get("alert_phone", DEFAULT_ALERT_PHONE)).strip()
+    control["alert_service"] = request.form.get("alert_service", control.get("alert_service", "auto")).strip() or "auto"
     api_key = request.form.get("api_key", "").strip().strip("'\"")
     account_id = request.form.get("account_id", "").strip().strip("'\"")
     if api_key:
@@ -600,6 +639,17 @@ def start_tracking():
     if signal:
         signal_store["signals"].insert(0, signal)
     save_json(SIGNALS_FILE, signal_store)
+
+    if signal and pair_state.get("last_alerted_signal_time") != signal.get("detected_at"):
+        try:
+            send_signal_text(control, signal)
+            pair_state["last_alerted_signal_time"] = signal.get("detected_at")
+            state[pair] = pair_state
+            save_json(STATE_FILE, state)
+        except Exception as exc:
+            pair_state["last_error"] = f"Text alert failed: {exc}"
+            state[pair] = pair_state
+            save_json(STATE_FILE, state)
 
     live_bot_running = subprocess.run(["pgrep", "-f", "forex-bot-icc/live_bot.py"], capture_output=True, text=True)
     if live_bot_running.returncode != 0:
@@ -672,6 +722,18 @@ def dashboard():
 
               <div class=\"label\">Oanda Account ID</div>
               <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
+
+              <div class=\"label\">Text Alerts</div>
+              <label class=\"help\" style=\"display:flex; align-items:center; gap:8px; margin-bottom:8px;\">
+                <input type=\"checkbox\" name=\"notify_enabled\" {% if control.notify_enabled %}checked{% endif %} style=\"width:auto; margin:0;\" />
+                Text me when a signal is put out
+              </label>
+              <input type=\"text\" name=\"alert_phone\" value=\"{{ control.alert_phone }}\" placeholder=\"Phone number\" />
+              <select name=\"alert_service\">
+                <option value=\"auto\" {% if control.alert_service == 'auto' %}selected{% endif %}>Auto</option>
+                <option value=\"imessage\" {% if control.alert_service == 'imessage' %}selected{% endif %}>iMessage</option>
+                <option value=\"sms\" {% if control.alert_service == 'sms' %}selected{% endif %}>SMS</option>
+              </select>
 
               <div class=\"label\">Pair</div>
               <input id=\"selected_instrument\" class=\"hidden-input\" name=\"selected_instrument\" value=\"{{ control.selected_instrument }}\" />
