@@ -96,26 +96,37 @@ BASE_HTML = """<!doctype html>
     }
     .favorites-list {
       display: grid;
-      gap: 8px;
+      gap: 6px;
       max-height: 220px;
       overflow: auto;
       margin-top: 10px;
+      padding-right: 2px;
     }
     .favorite-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
+      gap: 8px;
+      padding: 7px 10px;
       border-radius: 10px;
-      background: rgba(19,33,59,.55);
-      border: 1px solid var(--border);
-      font-size: .86rem;
+      background: rgba(2,6,23,.55);
+      border: 1px solid rgba(255,255,255,.05);
     }
     .favorite-row input[type='checkbox'] {
-      width: 16px;
-      height: 16px;
-      margin: 0;
+      display: none;
+    }
+    .star-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      color: #fbbf24;
+      padding: 0;
+    }
+    .star-btn.off {
+      color: #64748b;
     }
     button {
       border: none;
@@ -195,6 +206,20 @@ BASE_HTML = """<!doctype html>
     setTimeout(() => {
       window.location.reload();
     }, 60000);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.favorite-row').forEach((row) => {
+        const checkbox = row.querySelector('input[type="checkbox"]');
+        const star = row.querySelector('.star-btn');
+        if (!checkbox || !star) return;
+        row.addEventListener('click', (event) => {
+          if (event.target.tagName === 'INPUT') return;
+          checkbox.checked = !checkbox.checked;
+          star.textContent = checkbox.checked ? '★' : '☆';
+          star.classList.toggle('off', !checkbox.checked);
+        });
+      });
+    });
   </script>
 </body>
 </html>
@@ -590,19 +615,18 @@ def dashboard():
               {% if instruments %}
               <div class=\"favorites\">
                 <div class=\"label\">Favorites</div>
-                <div class=\"help\">Save your most-used pairs so they stay pinned at the top like your other bot.</div>
+                <div class=\"help\">Click the star to save or remove a favorite.</div>
                 <div class=\"favorites-list\">
                   {% for instrument in instruments %}
                     <label class=\"favorite-row\">
                       <span>{{ instrument }}</span>
                       <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ instrument }}\" {% if instrument in favorites %}checked{% endif %} />
+                      <span class=\"star-btn {% if instrument not in favorites %}off{% endif %}\">{{ '★' if instrument in favorites else '☆' }}</span>
                     </label>
                   {% endfor %}
                 </div>
               </div>
               {% endif %}
-
-              <input type=\"hidden\" name=\"persist_favorites\" value=\"1\" />
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
