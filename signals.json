@@ -1,14 +1,3 @@
 {
-  "signals": [
-    {
-      "pair": "EUR_USD",
-      "side": "BUY",
-      "timeframe_context": "Daily / 4H / 1H",
-      "detected_at": "Sample signal",
-      "entry": "Origin level",
-      "stop_loss": "50 pips",
-      "take_profit": "Indication extreme",
-      "indication_level": "Most recent broken high"
-    }
-  ]
+  "signals": []
 }
