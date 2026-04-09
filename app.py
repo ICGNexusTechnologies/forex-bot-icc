@@ -715,7 +715,7 @@ def dashboard():
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
-              <form method=\"post\" action=\"{{ url_for('start_tracking') }}\"><button type=\"submit\" {% if control.status == 'tracking' %}disabled{% endif %}>Start Tracking</button></form>
+              <form method=\"post\" action=\"{{ url_for('start_tracking') }}\"><button type=\"submit\" {% if control.status == 'tracking' %}disabled{% endif %}>Start</button></form>
               <form method=\"post\" action=\"{{ url_for('stop_tracking') }}\"><button class=\"secondary\" type=\"submit\" {% if control.status != 'tracking' %}disabled{% endif %}>Stop</button></form>
             </div>
 
