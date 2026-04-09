@@ -419,9 +419,12 @@ def submit_controls():
     control = load_control()
     control["account_mode"] = "live" if request.form.get("account_mode") == "live" else "demo"
     selected_instrument = request.form.get("selected_instrument", "").strip()
-    control["favorites"] = request.form.getlist("favorite_instruments")
+    favorite_instruments = request.form.getlist("favorite_instruments")
+    control["favorites"] = favorite_instruments
     if selected_instrument:
         control["selected_instrument"] = selected_instrument
+    elif favorite_instruments and not control.get("selected_instrument"):
+        control["selected_instrument"] = favorite_instruments[0]
     api_key = request.form.get("api_key", "").strip().strip("'\"")
     account_id = request.form.get("account_id", "").strip().strip("'\"")
     if api_key:
@@ -459,6 +462,7 @@ def start_tracking():
         return redirect(url_for("dashboard", flash=f"Tracking started, but scan failed: {exc}", kind="error"))
 
     pair = control["selected_instrument"]
+    state = {pair: state.get(pair, {}) if isinstance(state.get(pair), dict) else {}}
     pair_state = state.get(pair, {}) if isinstance(state.get(pair), dict) else {}
     pair_state.update(
         {
@@ -657,7 +661,7 @@ def dashboard():
         control=control,
         instruments=instruments,
         active_pair=active_pair,
-        tracked_count=len([k for k, v in state.items() if isinstance(v, dict) and v.get("tracking")]),
+        tracked_count=(1 if active_pair and isinstance(state.get(active_pair), dict) and state.get(active_pair, {}).get("tracking") else 0),
         signal_count=len(active_signals),
         latest_signal=latest_signal,
         tracked_state=json.dumps(state.get(active_pair, {}), indent=2) if state.get(active_pair) else "No tracking state saved yet.",
