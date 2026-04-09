@@ -185,7 +185,7 @@ def save_json(path: Path, data: Any) -> None:
 def default_control() -> dict[str, Any]:
     return {
         "account_mode": "demo",
-        "selected_instrument": "EUR_USD",
+        "selected_instrument": "",
         "api_key": "",
         "account_id": "",
         "status": "idle",
@@ -481,10 +481,8 @@ def dashboard():
             instruments = fetch_instruments(control["api_key"], control["account_id"], control["account_mode"])
         except Exception as exc:
             instrument_error = str(exc)
-    active_pair = control.get("selected_instrument", "EUR_USD")
-    if not instruments:
-        instruments = [active_pair]
-    elif active_pair not in instruments:
+    active_pair = control.get("selected_instrument", "")
+    if instruments and active_pair and active_pair not in instruments:
         instruments = [active_pair] + [instrument for instrument in instruments if instrument != active_pair]
 
     active_signals = [s for s in signals if s.get("pair") == active_pair]
@@ -519,7 +517,7 @@ def dashboard():
               <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
 
               <div class=\"label\">Pair</div>
-              <input name=\"selected_instrument\" list=\"instrument-list\" value=\"{{ active_pair }}\" placeholder=\"GBP_JPY\" style=\"text-transform:uppercase;\" />
+              <input name=\"selected_instrument\" list=\"instrument-list\" value=\"{{ active_pair }}\" placeholder=\"Enter API key, account ID, then load/select a pair\" style=\"text-transform:uppercase;\" />
               <datalist id=\"instrument-list\">
                 {% for instrument in instruments %}
                   <option value=\"{{ instrument }}\"></option>
@@ -529,6 +527,9 @@ def dashboard():
               <div class=\"btnrow\">
                 <button type=\"submit\">Submit</button>
               </div>
+              {% if not instruments and not instrument_error and not control.api_key %}
+                <div class=\"help\">Enter your Oanda API key and account ID, then click Submit to load available pairs.</div>
+              {% endif %}
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
