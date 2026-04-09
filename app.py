@@ -781,6 +781,9 @@ def dashboard():
                 <div class=\"metric\"><div class=\"k\">Last Scan</div><div class=\"v\">{{ last_scan_display }}</div></div>
                 <div class=\"metric\"><div class=\"k\">Last Side</div><div class=\"v\">{{ pair_state.last_signal_side or '—' }}</div></div>
                 <div class=\"metric\"><div class=\"k\">Last Signal Time</div><div class=\"v\">{{ last_signal_time_display }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Entry</div><div class=\"v\">{{ active_signal.entry if active_signal else '—' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Stop Loss</div><div class=\"v\">{{ active_signal.stop_loss if active_signal else '—' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ active_signal.take_profit if active_signal else '—' }}</div></div>
               </div>
               {% if pair_state.last_error %}
                 <div class=\"flash error\" style=\"margin-top:12px;\">{{ pair_state.last_error }}</div>
@@ -796,6 +799,7 @@ def dashboard():
         signal_count=len(active_signals),
         latest_signal=latest_signal,
         pair_state=(state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}),
+        active_signal=((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("active_signal") or latest_signal),
         started_at_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("started_at")),
         last_scan_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("last_scan_at")),
         last_signal_time_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("last_signal_time")),
