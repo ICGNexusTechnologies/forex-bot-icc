@@ -95,38 +95,21 @@ BASE_HTML = """<!doctype html>
       padding-top: 14px;
     }
     .favorites-list {
-      display: grid;
-      gap: 6px;
-      max-height: 220px;
-      overflow: auto;
-      margin-top: 10px;
-      padding-right: 2px;
+      display:grid; gap:6px; max-height:220px; overflow:auto; margin-top:10px; padding-right:2px;
     }
     .favorite-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 7px 10px;
-      border-radius: 10px;
-      background: rgba(2,6,23,.55);
-      border: 1px solid rgba(255,255,255,.05);
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      padding:7px 10px; border-radius:10px; background: rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.05);
     }
     .favorite-row input[type='checkbox'] {
       display: none;
     }
     .star-btn {
-      appearance: none;
-      border: none;
-      background: transparent;
-      cursor: pointer;
-      font-size: 16px;
-      line-height: 1;
-      color: #fbbf24;
-      padding: 0;
+      appearance:none; border:none; background:transparent; cursor:pointer; font-size:16px; line-height:1;
+      color:#fbbf24; padding:0;
     }
     .star-btn.off {
-      color: #64748b;
+      color:#64748b;
     }
     button {
       border: none;
@@ -213,6 +196,7 @@ BASE_HTML = """<!doctype html>
         const star = row.querySelector('.star-btn');
         if (!checkbox || !star) return;
         row.addEventListener('click', (event) => {
+          event.preventDefault();
           if (event.target.tagName === 'INPUT') return;
           checkbox.checked = !checkbox.checked;
           star.textContent = checkbox.checked ? '★' : '☆';
@@ -616,11 +600,11 @@ def dashboard():
               <div>
                 <div class=\"label\">Favorites</div>
                 <div class=\"favorites-list\">
-                  {% for instrument in instruments %}
+                  {% for name in instruments %}
                     <label class=\"favorite-row\">
-                      <span>{{ instrument }}</span>
-                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ instrument }}\" {% if instrument in favorites %}checked{% endif %} style=\"display:none;\" />
-                      <span class=\"star-btn {% if instrument not in favorites %}off{% endif %}\">{{ '★' if instrument in favorites else '☆' }}</span>
+                      <span>{{ name }}</span>
+                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ name }}\" {% if name in favorites %}checked{% endif %} style=\"display:none;\" />
+                      <span class=\"star-btn {% if name not in favorites %}off{% endif %}\">{{ '★' if name in favorites else '☆' }}</span>
                     </label>
                   {% endfor %}
                 </div>
