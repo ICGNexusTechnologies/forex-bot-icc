@@ -601,6 +601,8 @@ def dashboard():
                 </div>
               </div>
               {% endif %}
+
+              <input type=\"hidden\" name=\"persist_favorites\" value=\"1\" />
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
