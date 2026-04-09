@@ -174,6 +174,11 @@ BASE_HTML = """<!doctype html>
       background: linear-gradient(135deg, #6366f1, #8b5cf6);
     }
     button.secondary { background: #1e293b; border: 1px solid var(--border); }
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+      filter: grayscale(.15);
+    }
     .pill {
       display: inline-flex;
       align-items: center;
@@ -710,8 +715,8 @@ def dashboard():
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
-              <form method=\"post\" action=\"{{ url_for('start_tracking') }}\"><button type=\"submit\">Start Tracking</button></form>
-              <form method=\"post\" action=\"{{ url_for('stop_tracking') }}\"><button class=\"secondary\" type=\"submit\">Stop</button></form>
+              <form method=\"post\" action=\"{{ url_for('start_tracking') }}\"><button type=\"submit\" {% if control.status == 'tracking' %}disabled{% endif %}>Start Tracking</button></form>
+              <form method=\"post\" action=\"{{ url_for('stop_tracking') }}\"><button class=\"secondary\" type=\"submit\" {% if control.status != 'tracking' %}disabled{% endif %}>Stop</button></form>
             </div>
 
             <div class=\"help\" style=\"margin-top:12px;\">
