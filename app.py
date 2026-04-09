@@ -519,11 +519,12 @@ def dashboard():
               <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
 
               <div class=\"label\">Pair</div>
-              <select name=\"selected_instrument\">
+              <input name=\"selected_instrument\" list=\"instrument-list\" value=\"{{ active_pair }}\" placeholder=\"GBP_JPY\" style=\"text-transform:uppercase;\" />
+              <datalist id=\"instrument-list\">
                 {% for instrument in instruments %}
-                  <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
+                  <option value=\"{{ instrument }}\"></option>
                 {% endfor %}
-              </select>
+              </datalist>
 
               <div class=\"btnrow\">
                 <button type=\"submit\">Submit</button>
