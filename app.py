@@ -423,7 +423,7 @@ def build_signal_text(signal: dict[str, Any]) -> str:
     )
 
 
-def send_signal_text(control: dict[str, Any], signal: dict[str, Any]) -> None:
+def send_text_message(control: dict[str, Any], message: str) -> None:
     if not control.get("notify_enabled"):
         return
     alert_phone = (control.get("alert_phone") or "").strip()
@@ -437,13 +437,17 @@ def send_signal_text(control: dict[str, Any], signal: dict[str, Any]) -> None:
             "--to",
             alert_phone,
             "--text",
-            build_signal_text(signal),
+            message,
             "--service",
             alert_service,
         ],
         check=True,
         timeout=30,
     )
+
+
+def send_signal_text(control: dict[str, Any], signal: dict[str, Any]) -> None:
+    send_text_message(control, build_signal_text(signal))
 
 
 def find_origin_level(candles: list[dict[str, Any]], breakout_index: int, side: str) -> float | None:

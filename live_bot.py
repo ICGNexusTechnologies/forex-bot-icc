@@ -4,22 +4,32 @@ import json
 import time
 from datetime import datetime, timezone
 
-from app import SIGNALS_FILE, STATE_FILE, build_signal_for_pair, load_control, load_json, save_json, send_signal_text
+from app import SIGNALS_FILE, STATE_FILE, build_signal_for_pair, load_control, load_json, save_json, send_signal_text, send_text_message
 
 SCAN_INTERVAL_SECONDS = 60
 
 
 def main() -> None:
+    startup_text_sent = False
     while True:
         control = load_control()
         if control.get("status") != "tracking":
+            startup_text_sent = False
             time.sleep(SCAN_INTERVAL_SECONDS)
             continue
 
         pair = control.get("selected_instrument")
         if not pair or not control.get("api_key") or not control.get("account_id"):
+            startup_text_sent = False
             time.sleep(SCAN_INTERVAL_SECONDS)
             continue
+
+        if not startup_text_sent:
+            try:
+                send_text_message(control, f"ICC bot connected, tracking {pair}")
+                startup_text_sent = True
+            except Exception:
+                pass
 
         state = load_json(STATE_FILE, {})
         signal_store = load_json(SIGNALS_FILE, {"signals": []})
