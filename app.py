@@ -427,14 +427,16 @@ def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int
         previous = candles[max(0, idx - lookback):idx]
         if not previous:
             continue
+        body_high = max(candle["open"], candle["close"])
+        body_low = min(candle["open"], candle["close"])
         if side == "BUY":
-            reference = max(c["high"] for c in previous)
-            if candle["high"] > reference:
-                return idx, reference, candle["high"]
+            reference = max(max(c["open"], c["close"]) for c in previous)
+            if body_high > reference:
+                return idx, reference, body_high
         else:
-            reference = min(c["low"] for c in previous)
-            if candle["low"] < reference:
-                return idx, reference, candle["low"]
+            reference = min(min(c["open"], c["close"]) for c in previous)
+            if body_low < reference:
+                return idx, reference, body_low
     return None, None, None
 
 
@@ -484,7 +486,7 @@ def detect_icc_signal(instrument: str, candles_by_tf: dict[str, list[dict[str, A
                 "indication_extreme": format_price(instrument, extreme),
                 "bias_notes": (
                     f"Daily bias: {timeframe_bias(daily)}, 4H bias: {timeframe_bias(h4)}, "
-                    f"1H breakout from recent {'high' if side == 'BUY' else 'low'}"
+                    f"1H body-close breakout from recent {'high' if side == 'BUY' else 'low'}"
                 ),
                 "breakout_index": breakout_index,
             }
