@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -444,9 +445,10 @@ def send_text_message(control: dict[str, Any], message: str) -> None:
     if not alert_phone:
         return
     alert_service = (control.get("alert_service") or "auto").strip() or "auto"
+    imsg_bin = shutil.which("imsg") or "/opt/homebrew/bin/imsg"
     subprocess.run(
         [
-            "/opt/homebrew/bin/imsg",
+            imsg_bin,
             "send",
             "--to",
             alert_phone,
