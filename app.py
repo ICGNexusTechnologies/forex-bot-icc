@@ -385,7 +385,9 @@ def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
 def submit_controls():
     control = load_control()
     control["account_mode"] = "live" if request.form.get("account_mode") == "live" else "demo"
-    control["selected_instrument"] = request.form.get("selected_instrument", control["selected_instrument"])
+    selected_instrument = request.form.get("selected_instrument", "").strip()
+    if selected_instrument:
+        control["selected_instrument"] = selected_instrument
     api_key = request.form.get("api_key", "").strip().strip("'\"")
     account_id = request.form.get("account_id", "").strip().strip("'\"")
     if api_key:
@@ -479,10 +481,12 @@ def dashboard():
             instruments = fetch_instruments(control["api_key"], control["account_id"], control["account_mode"])
         except Exception as exc:
             instrument_error = str(exc)
-    if not instruments:
-        instruments = [control.get("selected_instrument", "EUR_USD")]
-
     active_pair = control.get("selected_instrument", "EUR_USD")
+    if not instruments:
+        instruments = [active_pair]
+    elif active_pair not in instruments:
+        instruments = [active_pair] + [instrument for instrument in instruments if instrument != active_pair]
+
     active_signals = [s for s in signals if s.get("pair") == active_pair]
     latest_signal = active_signals[0] if active_signals else None
     status_class = "green" if control.get("status") == "tracking" else "amber"
