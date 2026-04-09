@@ -89,28 +89,6 @@ BASE_HTML = """<!doctype html>
       border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin-bottom: 12px;
     }
     .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
-    .favorites {
-      margin-top: 14px;
-      border-top: 1px solid var(--border);
-      padding-top: 14px;
-    }
-    .favorites-list {
-      display:grid; gap:6px; max-height:220px; overflow:auto; margin-top:10px; padding-right:2px;
-    }
-    .favorite-row {
-      display:flex; align-items:center; justify-content:space-between; gap:8px;
-      padding:7px 10px; border-radius:10px; background: rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.05);
-    }
-    .favorite-row input[type='checkbox'] {
-      display: none;
-    }
-    .star-btn {
-      appearance:none; border:none; background:transparent; cursor:pointer; font-size:16px; line-height:1;
-      color:#fbbf24; padding:0;
-    }
-    .star-btn.off {
-      color:#64748b;
-    }
     button {
       border: none;
       border-radius: 12px;
@@ -189,21 +167,6 @@ BASE_HTML = """<!doctype html>
     setTimeout(() => {
       window.location.reload();
     }, 60000);
-
-    window.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('.favorite-row').forEach((row) => {
-        const checkbox = row.querySelector('input[type="checkbox"]');
-        const star = row.querySelector('.star-btn');
-        if (!checkbox || !star) return;
-        row.addEventListener('click', (event) => {
-          event.preventDefault();
-          if (event.target.tagName === 'INPUT') return;
-          checkbox.checked = !checkbox.checked;
-          star.textContent = checkbox.checked ? '★' : '☆';
-          star.classList.toggle('off', !checkbox.checked);
-        });
-      });
-    });
   </script>
 </body>
 </html>
@@ -428,12 +391,10 @@ def submit_controls():
     control = load_control()
     control["account_mode"] = "live" if request.form.get("account_mode") == "live" else "demo"
     selected_instrument = request.form.get("selected_instrument", "").strip()
-    favorite_instruments = request.form.getlist("favorite_instruments")
-    control["favorites"] = favorite_instruments
+    if selected_instrument.startswith("★ "):
+        selected_instrument = selected_instrument[2:]
     if selected_instrument:
         control["selected_instrument"] = selected_instrument
-    elif favorite_instruments and not control.get("selected_instrument"):
-        control["selected_instrument"] = favorite_instruments[0]
     api_key = request.form.get("api_key", "").strip().strip("'\"")
     account_id = request.form.get("account_id", "").strip().strip("'\"")
     if api_key:
@@ -529,7 +490,7 @@ def dashboard():
         except Exception as exc:
             instrument_error = str(exc)
     active_pair = control.get("selected_instrument", "")
-    favorites = control.get("favorites", [])
+    favorites = [active_pair] if active_pair else []
     if instruments and active_pair and active_pair not in instruments:
         instruments = [active_pair] + [instrument for instrument in instruments if instrument != active_pair]
     favorite_names = [name for name in favorites if name in instruments]
@@ -596,21 +557,6 @@ def dashboard():
                 <div class=\"help\">Enter your Oanda API key and account ID, then click Submit to load available pairs.</div>
               {% endif %}
 
-              {% if instruments %}
-              <div>
-                <div class=\"label\">Favorites</div>
-                <div class=\"favorites-list\">
-                  {% for name in instruments %}
-                    <label class=\"favorite-row\">
-                      <span>{{ name }}</span>
-                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ name }}\" {% if name in favorites %}checked{% endif %} style=\"display:none;\" />
-                      <span class=\"star-btn {% if name not in favorites %}off{% endif %}\">{{ '★' if name in favorites else '☆' }}</span>
-                    </label>
-                  {% endfor %}
-                </div>
-                <div class=\"help\" style=\"margin-top:8px;\">Click the star to save or remove a favorite.</div>
-              </div>
-              {% endif %}
             </form>
 
             <div class=\"btnrow\" style=\"margin-top:12px;\">
