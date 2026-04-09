@@ -24,13 +24,14 @@ TIMEFRAME_CONFIG = {
     "D": {"granularity": "D", "count": 120},
     "H4": {"granularity": "H4", "count": 160},
     "H1": {"granularity": "H1", "count": 240},
+    "M15": {"granularity": "M15", "count": 320},
 }
 SWING_LOOKBACK = {
     "D": 20,
     "H4": 24,
     "H1": 30,
 }
-MAX_SIGNAL_AGE_HOURS = 48
+MAX_SIGNAL_AGE_HOURS = 12
 
 app = Flask(__name__)
 
@@ -401,7 +402,20 @@ def format_price(instrument: str, price: float) -> str:
 
 
 def parse_oanda_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    value = value.replace("Z", "+00:00")
+    if "." in value:
+        head, tail = value.split(".", 1)
+        frac = tail
+        suffix = ""
+        for marker in ("+", "-"):
+            idx = frac.find(marker)
+            if idx > 0:
+                suffix = frac[idx:]
+                frac = frac[:idx]
+                break
+        frac = frac[:6]
+        value = f"{head}.{frac}{suffix}" if frac else f"{head}{suffix}"
+    return datetime.fromisoformat(value)
 
 
 def format_display_time(value: str | None) -> str:
@@ -450,16 +464,18 @@ def send_signal_text(control: dict[str, Any], signal: dict[str, Any]) -> None:
     send_text_message(control, build_signal_text(signal))
 
 
-def find_origin_level(candles: list[dict[str, Any]], breakout_index: int, side: str) -> float | None:
-    if breakout_index <= 0:
-        return None
-    start = max(0, breakout_index - SWING_LOOKBACK["H1"])
-    window = candles[start:breakout_index]
-    if not window:
-        return None
-    if side == "BUY":
-        return max(c["high"] for c in window)
-    return min(c["low"] for c in window)
+def is_swing_high(candles: list[dict[str, Any]], idx: int) -> bool:
+    if idx <= 0 or idx >= len(candles) - 1:
+        return False
+    current = candles[idx]["high"]
+    return current > candles[idx - 1]["high"] and current >= candles[idx + 1]["high"]
+
+
+def is_swing_low(candles: list[dict[str, Any]], idx: int) -> bool:
+    if idx <= 0 or idx >= len(candles) - 1:
+        return False
+    current = candles[idx]["low"]
+    return current < candles[idx - 1]["low"] and current <= candles[idx + 1]["low"]
 
 
 def timeframe_bias(candles: list[dict[str, Any]]) -> str:
@@ -474,24 +490,36 @@ def timeframe_bias(candles: list[dict[str, Any]]) -> str:
 
 
 def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int) -> tuple[int | None, float | None, float | None]:
-    if len(candles) < lookback + 2:
+    if len(candles) < 5:
         return None, None, None
-    start = max(lookback, len(candles) - lookback)
+    start = max(2, len(candles) - lookback)
     for idx in range(len(candles) - 1, start - 1, -1):
         candle = candles[idx]
-        previous = candles[max(0, idx - lookback):idx]
-        if not previous:
-            continue
         body_high = max(candle["open"], candle["close"])
         body_low = min(candle["open"], candle["close"])
+
         if side == "BUY":
-            reference = max(max(c["open"], c["close"]) for c in previous)
+            reference_idx = None
+            for prev_idx in range(idx - 1, 1, -1):
+                if is_swing_high(candles, prev_idx):
+                    reference_idx = prev_idx
+                    break
+            if reference_idx is None:
+                continue
+            reference = candles[reference_idx]["high"]
             if body_high > reference:
-                return idx, reference, body_high
+                return idx, reference, candle["high"]
         else:
-            reference = min(min(c["open"], c["close"]) for c in previous)
+            reference_idx = None
+            for prev_idx in range(idx - 1, 1, -1):
+                if is_swing_low(candles, prev_idx):
+                    reference_idx = prev_idx
+                    break
+            if reference_idx is None:
+                continue
+            reference = candles[reference_idx]["low"]
             if body_low < reference:
-                return idx, reference, body_low
+                return idx, reference, candle["low"]
     return None, None, None
 
 
@@ -504,58 +532,143 @@ def signal_is_fresh(signal_time: str) -> bool:
     return age_hours <= MAX_SIGNAL_AGE_HOURS
 
 
-def detect_icc_signal(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
+def find_m15_precontinuation_entry(
+    candles: list[dict[str, Any]],
+    indication_time: str,
+    indication_level: float,
+    side: str,
+) -> tuple[str | None, str]:
+    if len(candles) < 8:
+        return None, "Not enough M15 candles"
+    try:
+        indication_dt = parse_oanda_time(indication_time)
+    except Exception:
+        return None, "Invalid indication time"
+
+    post = [c for c in candles if parse_oanda_time(c["time"]) >= indication_dt]
+    if len(post) < 4:
+        return None, "Waiting for correction after indication"
+
+    if side == "BUY":
+        for idx in range(2, len(post)):
+            candle = post[idx]
+            if candle["low"] > indication_level:
+                continue
+            body_high = max(candle["open"], candle["close"])
+            body_low = min(candle["open"], candle["close"])
+            upper_wick = candle["high"] - body_high
+            lower_wick = body_low - candle["low"]
+            if body_high > indication_level and upper_wick >= lower_wick:
+                return candle["time"], "Correction hit the level and M15 turned back up"
+        return None, "Waiting for bullish turn in correction zone"
+
+    for idx in range(2, len(post)):
+        candle = post[idx]
+        if candle["high"] < indication_level:
+            continue
+        body_high = max(candle["open"], candle["close"])
+        body_low = min(candle["open"], candle["close"])
+        upper_wick = candle["high"] - body_high
+        lower_wick = body_low - candle["low"]
+        if body_low < indication_level and lower_wick >= upper_wick:
+            return candle["time"], "Correction hit the level and M15 turned back down"
+    return None, "Waiting for bearish turn in correction zone"
+
+
+def evaluate_icc_phases(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     h1 = candles_by_tf.get("H1") or []
     h4 = candles_by_tf.get("H4") or []
     daily = candles_by_tf.get("D") or []
-    if len(h1) < 40 or len(h4) < 20 or len(daily) < 10:
-        return None
+    m15 = candles_by_tf.get("M15") or []
+    result: dict[str, Any] = {
+        "signal": None,
+        "phase_state": {
+            "side": None,
+            "indication": False,
+            "correction": False,
+            "continuation": False,
+            "entry": None,
+            "take_profit": None,
+            "indication_level": None,
+            "note": "No valid setup yet",
+        },
+    }
+    if len(h1) < 40 or len(h4) < 20 or len(daily) < 10 or len(m15) < 20:
+        result["phase_state"]["note"] = "Not enough market data yet"
+        return result
 
     buy_idx, buy_level, buy_extreme = find_recent_breakout(h1, "BUY", SWING_LOOKBACK["H1"])
     sell_idx, sell_level, sell_extreme = find_recent_breakout(h1, "SELL", SWING_LOOKBACK["H1"])
 
-    candidates: list[dict[str, Any]] = []
-    for side, breakout_index, level, extreme in (
+    candidates = [
         ("BUY", buy_idx, buy_level, buy_extreme),
         ("SELL", sell_idx, sell_level, sell_extreme),
-    ):
+    ]
+    freshest = None
+    for side, breakout_index, level, extreme in candidates:
         if breakout_index is None or level is None or extreme is None:
             continue
         breakout_candle = h1[breakout_index]
-        origin_level = find_origin_level(h1, breakout_index, side)
-        if origin_level is None:
-            origin_level = level
-        pip = pip_size(instrument)
-        stop_distance = 50 * pip
-        stop_loss = origin_level - stop_distance if side == "BUY" else origin_level + stop_distance
-        candidates.append(
-            {
-                "pair": instrument,
+        if freshest is None or breakout_candle["time"] > freshest["time"]:
+            freshest = {
                 "side": side,
-                "timeframe_context": "Daily / 4H / 1H",
-                "detected_at": breakout_candle["time"],
-                "entry": format_price(instrument, origin_level),
-                "stop_loss": format_price(instrument, stop_loss),
-                "take_profit": format_price(instrument, extreme),
-                "indication_level": format_price(instrument, level),
-                "indication_extreme": format_price(instrument, extreme),
-                "bias_notes": (
-                    f"Daily bias: {timeframe_bias(daily)}, 4H bias: {timeframe_bias(h4)}, "
-                    f"1H body-close breakout from recent {'high' if side == 'BUY' else 'low'}"
-                ),
                 "breakout_index": breakout_index,
+                "level": level,
+                "extreme": extreme,
+                "time": breakout_candle["time"],
             }
-        )
 
-    if not candidates:
-        return None
+    if freshest is None:
+        return result
 
-    candidates.sort(key=lambda item: item["breakout_index"], reverse=True)
-    signal = candidates[0]
+    side = freshest["side"]
+    level = freshest["level"]
+    extreme = freshest["extreme"]
+    breakout_time = freshest["time"]
+    continuation_time, continuation_note = find_m15_precontinuation_entry(m15, breakout_time, level, side)
+    phase_state = {
+        "side": side,
+        "indication": True,
+        "correction": "correction" in continuation_note.lower() or "zone" in continuation_note.lower(),
+        "continuation": continuation_time is not None,
+        "entry": format_price(instrument, level),
+        "take_profit": format_price(instrument, extreme),
+        "indication_level": format_price(instrument, level),
+        "note": continuation_note,
+    }
+    result["phase_state"] = phase_state
+
+    if continuation_time is None:
+        return result
+
+    pip = pip_size(instrument)
+    stop_distance = 50 * pip
+    stop_loss = level - stop_distance if side == "BUY" else level + stop_distance
+    signal = {
+        "pair": instrument,
+        "side": side,
+        "timeframe_context": "Daily / 4H / 1H / 15M",
+        "detected_at": continuation_time,
+        "entry": format_price(instrument, level),
+        "stop_loss": format_price(instrument, stop_loss),
+        "take_profit": format_price(instrument, extreme),
+        "indication_level": format_price(instrument, level),
+        "indication_extreme": format_price(instrument, extreme),
+        "bias_notes": (
+            f"Daily bias: {timeframe_bias(daily)}, 4H bias: {timeframe_bias(h4)}, "
+            f"1H body break through recent {'high' if side == 'BUY' else 'low'}, "
+            f"15M turn detected in correction zone"
+        ),
+        "continuation_note": continuation_note,
+    }
     if not signal_is_fresh(signal["detected_at"]):
-        return None
-    signal.pop("breakout_index", None)
-    return signal
+        return result
+    result["signal"] = signal
+    return result
+
+
+def detect_icc_signal(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
+    return evaluate_icc_phases(instrument, candles_by_tf).get("signal")
 
 
 def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
@@ -567,6 +680,35 @@ def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
     for tf, cfg in TIMEFRAME_CONFIG.items():
         candles_by_tf[tf] = fetch_candles(api_key, instrument, control.get("account_mode", "demo"), cfg["granularity"], cfg["count"])
     return detect_icc_signal(instrument, candles_by_tf)
+
+
+def build_phase_state_for_pair(control: dict[str, Any]) -> dict[str, Any]:
+    api_key = control.get("api_key", "")
+    instrument = control.get("selected_instrument", "")
+    if not api_key or not instrument:
+        return {
+            "side": None,
+            "indication": False,
+            "correction": False,
+            "continuation": False,
+            "entry": None,
+            "take_profit": None,
+            "indication_level": None,
+            "note": "Missing pair or Oanda credentials",
+        }
+    candles_by_tf: dict[str, list[dict[str, Any]]] = {}
+    for tf, cfg in TIMEFRAME_CONFIG.items():
+        candles_by_tf[tf] = fetch_candles(api_key, instrument, control.get("account_mode", "demo"), cfg["granularity"], cfg["count"])
+    return evaluate_icc_phases(instrument, candles_by_tf).get("phase_state") or {
+        "side": None,
+        "indication": False,
+        "correction": False,
+        "continuation": False,
+        "entry": None,
+        "take_profit": None,
+        "indication_level": None,
+        "note": "No valid setup yet",
+    }
 
 
 @app.post("/submit")
@@ -698,6 +840,16 @@ def dashboard():
 
     active_signals = [s for s in signals if s.get("pair") == active_pair]
     latest_signal = active_signals[0] if active_signals else None
+    phase_state = build_phase_state_for_pair(control) if control.get("api_key") and active_pair else {
+        "side": None,
+        "indication": False,
+        "correction": False,
+        "continuation": False,
+        "entry": None,
+        "take_profit": None,
+        "indication_level": None,
+        "note": "Missing pair or Oanda credentials",
+    }
     status_class = "green" if control.get("status") == "tracking" else "amber"
     status_label = "TRACKING" if control.get("status") == "tracking" else "IDLE"
 
@@ -814,30 +966,54 @@ def dashboard():
               <div class=\"stat\"><div class=\"k\">Signals on Dashboard</div><div class=\"v\">{{ signal_count }}</div></div>
             </div>
 
-            <div class=\"card\">
-              <h2 class=\"title\">Latest Signal</h2>
+            <div class="card">
+              <h2 class="title">Latest Signal</h2>
+              <div class="signal" style="margin-bottom:14px;">
+                <div class="signal-head">
+                  <div>
+                    <div class="signal-side {% if phase_state.side == 'BUY' %}buy{% elif phase_state.side == 'SELL' %}sell{% endif %}">{{ phase_state.side or 'WAITING' }}</div>
+                    <div class="help">{{ active_pair }} · Current ICC phase</div>
+                  </div>
+                  <div class="help">{{ phase_state.note }}</div>
+                </div>
+                <div style="display:grid; gap:8px; margin-top:12px;">
+                  <div class="metric" style="display:flex; justify-content:space-between; align-items:center; opacity:{{ '1' if phase_state.indication else '.45' }};">
+                    <div class="k">Indication</div><div class="v">{{ '✅' if phase_state.indication else '⬜' }}</div>
+                  </div>
+                  <div class="metric" style="display:flex; justify-content:space-between; align-items:center; opacity:{{ '1' if phase_state.correction else '.45' }};">
+                    <div class="k">Correction</div><div class="v">{{ '✅' if phase_state.correction else '⬜' }}</div>
+                  </div>
+                  <div class="metric" style="display:flex; justify-content:space-between; align-items:center; opacity:{{ '1' if phase_state.continuation else '.45' }};">
+                    <div class="k">Continuation Ready</div><div class="v">{{ '✅' if phase_state.continuation else '⬜' }}</div>
+                  </div>
+                </div>
+                <div class="signal-grid" style="margin-top:12px;">
+                  <div class="metric"><div class="k">Planned Entry</div><div class="v">{{ phase_state.entry or '—' }}</div></div>
+                  <div class="metric"><div class="k">Planned TP</div><div class="v">{{ phase_state.take_profit or '—' }}</div></div>
+                  <div class="metric"><div class="k">Indication Level</div><div class="v">{{ phase_state.indication_level or '—' }}</div></div>
+                </div>
+              </div>
               {% if latest_signal %}
-                <div class=\"signal\">
-                  <div class=\"signal-head\">
+                <div class="signal">
+                  <div class="signal-head">
                     <div>
-                      <div class=\"signal-side {{ 'buy' if latest_signal.side == 'BUY' else 'sell' }}\">{{ latest_signal.side }}</div>
-                      <div class=\"help\">{{ latest_signal.pair }} · {{ latest_signal.timeframe_context }}</div>
+                      <div class="signal-side {{ 'buy' if latest_signal.side == 'BUY' else 'sell' }}">{{ latest_signal.side }}</div>
+                      <div class="help">{{ latest_signal.pair }} · {{ latest_signal.timeframe_context }}</div>
                     </div>
-                    <div class=\"help\">{{ latest_signal.detected_at }}</div>
+                    <div class="help">{{ latest_signal.detected_at }}</div>
                   </div>
-                  <div class=\"signal-grid\">
-                    <div class=\"metric\"><div class=\"k\">Entry</div><div class=\"v\">{{ latest_signal.entry }}</div></div>
-                    <div class=\"metric\"><div class=\"k\">Stop Loss</div><div class=\"v\">{{ latest_signal.stop_loss }}</div></div>
-                    <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ latest_signal.take_profit }}</div></div>
-                    <div class=\"metric\"><div class=\"k\">Indication Level</div><div class=\"v\">{{ latest_signal.indication_level }}</div></div>
+                  <div class="signal-grid">
+                    <div class="metric"><div class="k">Entry</div><div class="v">{{ latest_signal.entry }}</div></div>
+                    <div class="metric"><div class="k">Stop Loss</div><div class="v">{{ latest_signal.stop_loss }}</div></div>
+                    <div class="metric"><div class="k">Take Profit</div><div class="v">{{ latest_signal.take_profit }}</div></div>
+                    <div class="metric"><div class="k">Indication Level</div><div class="v">{{ latest_signal.indication_level }}</div></div>
                   </div>
-                  <div class=\"help\" style=\"margin-top:10px;\">{{ latest_signal.bias_notes }}</div>
+                  <div class="help" style="margin-top:10px;">{{ latest_signal.bias_notes }}</div>
                 </div>
               {% else %}
-                <div class=\"help\">No signal yet for this pair. Start tracking after entering your Oanda credentials and pair.</div>
+                <div class="help">No signal yet for this pair. Start tracking after entering your Oanda credentials and pair.</div>
               {% endif %}
             </div>
-
             <div class=\"card\" style=\"margin-top:16px;\">
               <h2 class=\"title\">Tracked State</h2>
               <div class=\"signal-grid\">
@@ -864,6 +1040,7 @@ def dashboard():
         tracked_count=(1 if active_pair and isinstance(state.get(active_pair), dict) and state.get(active_pair, {}).get("tracking") else 0),
         signal_count=len(active_signals),
         latest_signal=latest_signal,
+        phase_state=phase_state,
         pair_state=(state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}),
         active_signal=((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("active_signal") or latest_signal),
         started_at_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("started_at")),
