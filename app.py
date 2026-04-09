@@ -1,0 +1,375 @@
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import requests
+from flask import Flask, redirect, render_template_string, request, url_for
+
+BOT_ROOT = Path(__file__).resolve().parent
+CONTROL_FILE = BOT_ROOT / "dashboard_control.json"
+SIGNALS_FILE = BOT_ROOT / "signals.json"
+STATE_FILE = BOT_ROOT / "state.json"
+CREDS_FILE = BOT_ROOT / ".oanda_env"
+
+app = Flask(__name__)
+
+BASE_HTML = """<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Forex Bot ICC</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: #0f1b31;
+      --panel-2: #13213b;
+      --border: rgba(255,255,255,.08);
+      --text: #edf2ff;
+      --muted: #9fb0d0;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --blue: #6366f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #040915 0%, #07111f 100%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; }
+    .hero, .card {
+      background: linear-gradient(180deg, rgba(15,27,49,.96), rgba(11,21,39,.96));
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: 0 18px 40px rgba(0,0,0,.25);
+    }
+    .hero { padding: 22px; margin-bottom: 16px; }
+    .hero h1 { margin: 0 0 8px; font-size: 1.4rem; }
+    .hero p { margin: 0; color: var(--muted); line-height: 1.5; }
+    .grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+    .card { padding: 18px; }
+    .title { margin: 0 0 14px; font-size: .95rem; font-weight: 800; }
+    .label { font-size: .74rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .08em; }
+    .help { color: var(--muted); font-size: .8rem; line-height: 1.45; }
+    select, input {
+      width: 100%;
+      background: #08101f;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: .9rem;
+      margin-bottom: 12px;
+    }
+    .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-weight: 800;
+      color: white;
+      cursor: pointer;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    }
+    button.secondary { background: #1e293b; border: 1px solid var(--border); }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(99,102,241,.14);
+      border: 1px solid var(--border);
+      font-size: .8rem;
+      font-weight: 700;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--amber); }
+    .green { color: #bbf7d0; }
+    .green .dot { background: var(--green); }
+    .red { color: #fecaca; }
+    .red .dot { background: var(--red); }
+    .amber { color: #fde68a; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 14px; }
+    .stat {
+      background: rgba(8,16,31,.72);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .stat .k { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+    .stat .v { font-size: 1.05rem; font-weight: 800; }
+    .signal {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(8,16,31,.72);
+      margin-bottom: 12px;
+    }
+    .signal:last-child { margin-bottom: 0; }
+    .signal-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
+    .signal-side { font-size: 1rem; font-weight: 900; }
+    .buy { color: var(--green); }
+    .sell { color: var(--red); }
+    .signal-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+    .metric {
+      border-radius: 12px;
+      background: rgba(19,33,59,.75);
+      padding: 10px;
+    }
+    .metric .k { color: var(--muted); font-size: .7rem; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .08em; }
+    .metric .v { font-size: .95rem; font-weight: 800; }
+    .flash {
+      margin-top: 8px;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: .82rem;
+      font-weight: 700;
+      border: 1px solid var(--border);
+    }
+    .flash.success { background: rgba(34,197,94,.12); color: #bbf7d0; }
+    .flash.error { background: rgba(239,68,68,.12); color: #fecaca; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .stats, .signal-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class=\"wrap\">{{ body|safe }}</div>
+</body>
+</html>
+"""
+
+
+def load_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def save_json(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=2))
+
+
+def default_control() -> dict[str, Any]:
+    return {
+        "account_mode": "demo",
+        "selected_instrument": "EUR_USD",
+        "api_key": "",
+        "account_id": "",
+        "status": "idle",
+    }
+
+
+def load_control() -> dict[str, Any]:
+    return {**default_control(), **load_json(CONTROL_FILE, {})}
+
+
+def save_control(control: dict[str, Any]) -> None:
+    save_json(CONTROL_FILE, control)
+
+
+def write_creds_file(api_key: str, account_id: str, mode: str) -> None:
+    base = "https://api-fxtrade.oanda.com/v3" if mode == "live" else "https://api-fxpractice.oanda.com/v3"
+    CREDS_FILE.write_text(
+        f"export OANDA_API_BASE='{base}'\nexport OANDA_API_KEY='{api_key}'\nexport OANDA_ACCOUNT_ID='{account_id}'\n"
+    )
+
+
+def get_api_base(mode: str) -> str:
+    return "https://api-fxtrade.oanda.com/v3" if mode == "live" else "https://api-fxpractice.oanda.com/v3"
+
+
+def fetch_instruments(api_key: str, account_id: str, mode: str) -> list[str]:
+    if not api_key or not account_id:
+        return []
+    resp = requests.get(
+        f"{get_api_base(mode)}/accounts/{account_id}/instruments",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    return sorted(item["name"] for item in payload.get("instruments", []) if item.get("name"))
+
+
+@app.post("/submit")
+def submit_controls():
+    control = load_control()
+    control["account_mode"] = "live" if request.form.get("account_mode") == "live" else "demo"
+    control["selected_instrument"] = request.form.get("selected_instrument", control["selected_instrument"])
+    api_key = request.form.get("api_key", "").strip().strip("'\"")
+    account_id = request.form.get("account_id", "").strip().strip("'\"")
+    if api_key:
+        control["api_key"] = api_key
+    if account_id:
+        control["account_id"] = account_id
+    save_control(control)
+    if control["api_key"] and control["account_id"]:
+        write_creds_file(control["api_key"], control["account_id"], control["account_mode"])
+    return redirect(url_for("dashboard", flash="Settings saved", kind="success"))
+
+
+@app.post("/start")
+def start_tracking():
+    control = load_control()
+    if not control.get("selected_instrument"):
+        return redirect(url_for("dashboard", flash="Pick a pair first", kind="error"))
+    control["status"] = "tracking"
+    save_control(control)
+    state = load_json(STATE_FILE, {})
+    state[control["selected_instrument"]] = {"tracking": True, "started_at": datetime.utcnow().isoformat() + "Z"}
+    save_json(STATE_FILE, state)
+    return redirect(url_for("dashboard", flash=f"Tracking {control['selected_instrument']}", kind="success"))
+
+
+@app.post("/stop")
+def stop_tracking():
+    control = load_control()
+    control["status"] = "idle"
+    save_control(control)
+    return redirect(url_for("dashboard", flash="Tracking stopped", kind="success"))
+
+
+@app.route("/")
+@app.route("/dashboard")
+def dashboard():
+    control = load_control()
+    signals = load_json(SIGNALS_FILE, {"signals": []}).get("signals", [])
+    state = load_json(STATE_FILE, {})
+    instruments: list[str] = []
+    instrument_error = ""
+    if control.get("api_key") and control.get("account_id"):
+        try:
+            instruments = fetch_instruments(control["api_key"], control["account_id"], control["account_mode"])
+        except Exception as exc:
+            instrument_error = str(exc)
+    if not instruments:
+        instruments = [control.get("selected_instrument", "EUR_USD")]
+
+    active_pair = control.get("selected_instrument", "EUR_USD")
+    active_signals = [s for s in signals if s.get("pair") == active_pair]
+    latest_signal = active_signals[0] if active_signals else None
+    status_class = "green" if control.get("status") == "tracking" else "amber"
+    status_label = "TRACKING" if control.get("status") == "tracking" else "IDLE"
+
+    body = render_template_string(
+        """
+        <div class=\"hero\">
+          <h1>Forex Bot ICC Dashboard</h1>
+          <p>Signals only, no trade placement. Watches for ICC indication moves and displays projected entry, stop loss, and take profit for the selected Oanda pair.</p>
+        </div>
+
+        <div class=\"grid\">
+          <div class=\"card\">
+            <h2 class=\"title\">Controls</h2>
+            <div style=\"margin-bottom:12px;\">
+              <span class=\"pill {{ status_class }}\"><span class=\"dot\"></span>{{ status_label }}</span>
+            </div>
+            <form method=\"post\" action=\"{{ url_for('submit_controls') }}\">
+              <div class=\"label\">Account Mode</div>
+              <select name=\"account_mode\">
+                <option value=\"demo\" {% if control.account_mode == 'demo' %}selected{% endif %}>Demo</option>
+                <option value=\"live\" {% if control.account_mode == 'live' %}selected{% endif %}>Live</option>
+              </select>
+
+              <div class=\"label\">Oanda API Key</div>
+              <input type=\"password\" name=\"api_key\" value=\"{{ control.api_key }}\" placeholder=\"API key\" />
+
+              <div class=\"label\">Oanda Account ID</div>
+              <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
+
+              <div class=\"label\">Pair</div>
+              <select name=\"selected_instrument\">
+                {% for instrument in instruments %}
+                  <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
+                {% endfor %}
+              </select>
+
+              <div class=\"btnrow\">
+                <button type=\"submit\">Submit</button>
+              </div>
+            </form>
+
+            <div class=\"btnrow\" style=\"margin-top:12px;\">
+              <form method=\"post\" action=\"{{ url_for('start_tracking') }}\"><button type=\"submit\">Start Tracking</button></form>
+              <form method=\"post\" action=\"{{ url_for('stop_tracking') }}\"><button class=\"secondary\" type=\"submit\">Stop</button></form>
+            </div>
+
+            <div class=\"help\" style=\"margin-top:12px;\">
+              Uses Daily, 4H, and 1H structure. Signal should fire from the indication move, then display the projected return-to-level entry, 50 pip stop, and take profit at the indication extreme.
+            </div>
+
+            {% if flash %}
+              <div class=\"flash {{ kind }}\">{{ flash }}</div>
+            {% endif %}
+            {% if instrument_error %}
+              <div class=\"flash error\">Could not load Oanda instruments: {{ instrument_error }}</div>
+            {% endif %}
+          </div>
+
+          <div>
+            <div class=\"stats\">
+              <div class=\"stat\"><div class=\"k\">Selected Pair</div><div class=\"v\">{{ active_pair }}</div></div>
+              <div class=\"stat\"><div class=\"k\">Tracked Pairs</div><div class=\"v\">{{ tracked_count }}</div></div>
+              <div class=\"stat\"><div class=\"k\">Signals on Dashboard</div><div class=\"v\">{{ signal_count }}</div></div>
+            </div>
+
+            <div class=\"card\">
+              <h2 class=\"title\">Latest Signal</h2>
+              {% if latest_signal %}
+                <div class=\"signal\">
+                  <div class=\"signal-head\">
+                    <div>
+                      <div class=\"signal-side {{ 'buy' if latest_signal.side == 'BUY' else 'sell' }}\">{{ latest_signal.side }}</div>
+                      <div class=\"help\">{{ latest_signal.pair }} · {{ latest_signal.timeframe_context }}</div>
+                    </div>
+                    <div class=\"help\">{{ latest_signal.detected_at }}</div>
+                  </div>
+                  <div class=\"signal-grid\">
+                    <div class=\"metric\"><div class=\"k\">Entry</div><div class=\"v\">{{ latest_signal.entry }}</div></div>
+                    <div class=\"metric\"><div class=\"k\">Stop Loss</div><div class=\"v\">{{ latest_signal.stop_loss }}</div></div>
+                    <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ latest_signal.take_profit }}</div></div>
+                    <div class=\"metric\"><div class=\"k\">Indication Level</div><div class=\"v\">{{ latest_signal.indication_level }}</div></div>
+                  </div>
+                </div>
+              {% else %}
+                <div class=\"help\">No signal yet for this pair. Once tracking logic writes a signal, it will show here.</div>
+              {% endif %}
+            </div>
+
+            <div class=\"card\" style=\"margin-top:16px;\">
+              <h2 class=\"title\">Tracked State</h2>
+              <div class=\"help\">{{ tracked_state }}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        control=control,
+        instruments=instruments,
+        active_pair=active_pair,
+        tracked_count=len([k for k, v in state.items() if isinstance(v, dict) and v.get("tracking")]),
+        signal_count=len(active_signals),
+        latest_signal=latest_signal,
+        tracked_state=json.dumps(state.get(active_pair, {}), indent=2) if state.get(active_pair) else "No tracking state saved yet.",
+        flash=request.args.get("flash", ""),
+        kind=request.args.get("kind", "success"),
+        instrument_error=instrument_error,
+        status_class=status_class,
+        status_label=status_label,
+    )
+    return render_template_string(BASE_HTML, body=body)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8082, debug=True)
