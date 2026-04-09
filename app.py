@@ -89,16 +89,81 @@ BASE_HTML = """<!doctype html>
       border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin-bottom: 12px;
     }
     .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
-    .favorites-list { display:grid; gap:6px; max-height:220px; overflow:auto; padding-right:2px; }
-    .favorite-row {
-      display:flex; align-items:center; justify-content:space-between; gap:8px;
-      padding:7px 10px; border-radius:10px; background: rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.05);
+    .picker {
+      position: relative;
+      margin-bottom: 12px;
     }
-    .star-btn {
-      appearance:none; border:none; background:transparent; cursor:pointer; font-size:16px; line-height:1;
-      color:#fbbf24; padding:0;
+    .picker-button {
+      width: 100%;
+      background: rgba(2,6,23,.9);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: .9rem;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
-    .star-btn.off { color:#64748b; }
+    .picker-panel {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      background: rgba(8,16,31,.98);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(0,0,0,.3);
+      padding: 10px;
+      z-index: 30;
+      max-height: 320px;
+      overflow: hidden;
+    }
+    .picker-search {
+      margin-bottom: 8px;
+    }
+    .picker-list {
+      max-height: 240px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+    }
+    .picker-group-label {
+      color: var(--muted);
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin: 8px 0 4px;
+    }
+    .picker-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(2,6,23,.55);
+      border: 1px solid rgba(255,255,255,.05);
+      cursor: pointer;
+    }
+    .picker-row.active {
+      border-color: rgba(99,102,241,.7);
+      background: rgba(99,102,241,.16);
+    }
+    .picker-star {
+      appearance: none;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      color: #fbbf24;
+      padding: 0;
+    }
+    .picker-star.off { color: #64748b; }
+    .hidden-input { display: none; }
+    .is-hidden { display: none; }
     button {
       border: none;
       border-radius: 12px;
@@ -178,17 +243,55 @@ BASE_HTML = """<!doctype html>
       window.location.reload();
     }, 60000);
 
-    window.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('.favorite-row').forEach((row) => {
-        const checkbox = row.querySelector('input[type="checkbox"]');
-        const star = row.querySelector('.star-btn');
-        if (!checkbox || !star) return;
-        row.addEventListener('click', () => {
-          checkbox.checked = !checkbox.checked;
-          star.textContent = checkbox.checked ? '★' : '☆';
-          star.classList.toggle('off', !checkbox.checked);
-        });
+    function togglePicker() {
+      const panel = document.getElementById('pair-picker-panel');
+      if (!panel) return;
+      panel.classList.toggle('is-hidden');
+    }
+
+    function closePicker() {
+      const panel = document.getElementById('pair-picker-panel');
+      if (!panel) return;
+      panel.classList.add('is-hidden');
+    }
+
+    function selectPair(pair) {
+      const input = document.getElementById('selected_instrument');
+      const label = document.getElementById('pair-picker-label');
+      if (input) input.value = pair;
+      if (label) label.textContent = pair || 'Select a pair';
+      document.querySelectorAll('.picker-row').forEach((row) => {
+        row.classList.toggle('active', row.getAttribute('data-pair') === pair);
       });
+      closePicker();
+    }
+
+    function toggleFavorite(pair, event) {
+      event.stopPropagation();
+      const checkbox = document.querySelector(`input[data-favorite="${pair}"]`);
+      const star = document.querySelector(`button[data-star="${pair}"]`);
+      if (!checkbox || !star) return;
+      checkbox.checked = !checkbox.checked;
+      star.textContent = checkbox.checked ? '★' : '☆';
+      star.classList.toggle('off', !checkbox.checked);
+    }
+
+    function filterPairs() {
+      const query = (document.getElementById('pair-search')?.value || '').toUpperCase();
+      document.querySelectorAll('.picker-row').forEach((row) => {
+        const pair = (row.getAttribute('data-pair') || '').toUpperCase();
+        row.classList.toggle('is-hidden', !!query && !pair.includes(query));
+      });
+      document.querySelectorAll('.picker-group').forEach((group) => {
+        const visible = group.querySelector('.picker-row:not(.is-hidden)');
+        group.classList.toggle('is-hidden', !visible);
+      });
+    }
+
+    window.addEventListener('click', (event) => {
+      const picker = document.getElementById('pair-picker');
+      if (!picker) return;
+      if (!picker.contains(event.target)) closePicker();
     });
   </script>
 </body>
@@ -554,41 +657,45 @@ def dashboard():
               <input type=\"password\" name=\"account_id\" value=\"{{ control.account_id }}\" placeholder=\"Account ID\" />
 
               <div class=\"label\">Pair</div>
-              <select class=\"select\" name=\"selected_instrument\">
-                {% if instruments %}
-                  <option value=\"\">Select a pair</option>
-                  {% if favorite_names %}
-                    <optgroup label=\"Favorites\">
+              <input id=\"selected_instrument\" class=\"hidden-input\" name=\"selected_instrument\" value=\"{{ control.selected_instrument }}\" />
+              {% for name in instrument_names %}
+                <input class=\"hidden-input\" type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ name }}\" data-favorite=\"{{ name }}\" {% if name in favorites %}checked{% endif %} />
+              {% endfor %}
+              <div id=\"pair-picker\" class=\"picker\">
+                <button class=\"picker-button\" type=\"button\" onclick=\"togglePicker()\">
+                  <span id=\"pair-picker-label\">{{ control.selected_instrument or 'Select a pair' }}</span>
+                  <span>▾</span>
+                </button>
+                <div id=\"pair-picker-panel\" class=\"picker-panel is-hidden\">
+                  <input id=\"pair-search\" class=\"picker-search\" type=\"text\" placeholder=\"Search pairs\" oninput=\"filterPairs()\" />
+                  <div class=\"picker-list\">
+                    {% if favorite_names %}
+                    <div class=\"picker-group\">
+                      <div class=\"picker-group-label\">Favorites</div>
                       {% for name in favorite_names %}
-                        <option value=\"{{ name }}\" {% if name == control.selected_instrument %}selected{% endif %}>★ {{ name }}</option>
+                        <div class=\"picker-row {% if name == control.selected_instrument %}active{% endif %}\" data-pair=\"{{ name }}\" onclick=\"selectPair('{{ name }}')\">
+                          <span>★ {{ name }}</span>
+                          <button class=\"picker-star\" type=\"button\" data-star=\"{{ name }}\" onclick=\"toggleFavorite('{{ name }}', event)\">★</button>
+                        </div>
                       {% endfor %}
-                    </optgroup>
-                  {% endif %}
-                  {% if remaining_instruments %}
-                    <optgroup label=\"All OANDA Instruments\">
+                    </div>
+                    {% endif %}
+                    {% if remaining_instruments %}
+                    <div class=\"picker-group\">
+                      <div class=\"picker-group-label\">All OANDA Instruments</div>
                       {% for name in remaining_instruments %}
-                        <option value=\"{{ name }}\" {% if name == control.selected_instrument %}selected{% endif %}>{{ name }}</option>
+                        <div class=\"picker-row {% if name == control.selected_instrument %}active{% endif %}\" data-pair=\"{{ name }}\" onclick=\"selectPair('{{ name }}')\">
+                          <span>{{ name }}</span>
+                          <button class=\"picker-star {% if name not in favorites %}off{% endif %}\" type=\"button\" data-star=\"{{ name }}\" onclick=\"toggleFavorite('{{ name }}', event)\">{{ '★' if name in favorites else '☆' }}</button>
+                        </div>
                       {% endfor %}
-                    </optgroup>
-                  {% endif %}
-                {% else %}
-                  <option value=\"\" selected>Submit Oanda credentials to load pairs</option>
-                {% endif %}
-              </select>
-              <div class=\"help\" style=\"margin-top:8px;\">Saved favorites: <strong>{{ favorite_names|join(', ') if favorite_names else 'None' }}</strong></div>
-
-              <div>
-                <div class=\"label\">Favorites</div>
-                <div class=\"favorites-list\">
-                  {% for name in instrument_names %}
-                    <label class=\"favorite-row\">
-                      <span>{{ name }}</span>
-                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ name }}\" {% if name in favorites %}checked{% endif %} style=\"display:none;\" />
-                      <span class=\"star-btn {% if name not in favorites %}off{% endif %}\">{{ '★' if name in favorites else '☆' }}</span>
-                    </label>
-                  {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if not instrument_names %}
+                      <div class=\"help\">Submit Oanda credentials to load pairs</div>
+                    {% endif %}
+                  </div>
                 </div>
-                <div class=\"help\" style=\"margin-top:8px;\">Click the star to save or remove a favorite.</div>
               </div>
 
               <div class=\"btnrow\">
