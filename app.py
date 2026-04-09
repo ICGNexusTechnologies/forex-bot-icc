@@ -21,6 +21,12 @@ TIMEFRAME_CONFIG = {
     "H4": {"granularity": "H4", "count": 160},
     "H1": {"granularity": "H1", "count": 240},
 }
+SWING_LOOKBACK = {
+    "D": 20,
+    "H4": 24,
+    "H1": 30,
+}
+MAX_SIGNAL_AGE_HOURS = 48
 
 app = Flask(__name__)
 
@@ -246,62 +252,114 @@ def format_price(instrument: str, price: float) -> str:
     return f"{price:.{decimals}f}"
 
 
-def latest_swing(candles: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+def parse_oanda_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def find_origin_level(candles: list[dict[str, Any]], breakout_index: int, side: str) -> float | None:
+    if breakout_index <= 0:
+        return None
+    start = max(0, breakout_index - SWING_LOOKBACK["H1"])
+    window = candles[start:breakout_index]
+    if not window:
+        return None
+    if side == "BUY":
+        return max(c["high"] for c in window)
+    return min(c["low"] for c in window)
+
+
+def timeframe_bias(candles: list[dict[str, Any]]) -> str:
     if len(candles) < 3:
-        return None, None
-    recent = candles[-25:]
-    swing_high = max(c["high"] for c in recent[:-1])
-    swing_low = min(c["low"] for c in recent[:-1])
-    return swing_high, swing_low
+        return "neutral"
+    recent = candles[-3:]
+    if recent[-1]["close"] > recent[0]["close"]:
+        return "bullish"
+    if recent[-1]["close"] < recent[0]["close"]:
+        return "bearish"
+    return "neutral"
+
+
+def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int) -> tuple[int | None, float | None, float | None]:
+    if len(candles) < lookback + 2:
+        return None, None, None
+    start = max(lookback, len(candles) - lookback)
+    for idx in range(len(candles) - 1, start - 1, -1):
+        candle = candles[idx]
+        previous = candles[max(0, idx - lookback):idx]
+        if not previous:
+            continue
+        if side == "BUY":
+            reference = max(c["high"] for c in previous)
+            if candle["high"] > reference:
+                return idx, reference, candle["high"]
+        else:
+            reference = min(c["low"] for c in previous)
+            if candle["low"] < reference:
+                return idx, reference, candle["low"]
+    return None, None, None
+
+
+def signal_is_fresh(signal_time: str) -> bool:
+    try:
+        detected = parse_oanda_time(signal_time)
+    except Exception:
+        return False
+    age_hours = (datetime.now(timezone.utc) - detected.astimezone(timezone.utc)).total_seconds() / 3600
+    return age_hours <= MAX_SIGNAL_AGE_HOURS
 
 
 def detect_icc_signal(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
     h1 = candles_by_tf.get("H1") or []
     h4 = candles_by_tf.get("H4") or []
     daily = candles_by_tf.get("D") or []
-    if len(h1) < 30 or len(h4) < 10 or len(daily) < 5:
+    if len(h1) < 40 or len(h4) < 20 or len(daily) < 10:
         return None
 
-    recent_h1 = h1[-1]
-    recent_high, recent_low = latest_swing(h1)
-    if recent_high is None or recent_low is None:
+    buy_idx, buy_level, buy_extreme = find_recent_breakout(h1, "BUY", SWING_LOOKBACK["H1"])
+    sell_idx, sell_level, sell_extreme = find_recent_breakout(h1, "SELL", SWING_LOOKBACK["H1"])
+
+    candidates: list[dict[str, Any]] = []
+    for side, breakout_index, level, extreme in (
+        ("BUY", buy_idx, buy_level, buy_extreme),
+        ("SELL", sell_idx, sell_level, sell_extreme),
+    ):
+        if breakout_index is None or level is None or extreme is None:
+            continue
+        breakout_candle = h1[breakout_index]
+        origin_level = find_origin_level(h1, breakout_index, side)
+        if origin_level is None:
+            origin_level = level
+        pip = pip_size(instrument)
+        stop_distance = 50 * pip
+        stop_loss = origin_level - stop_distance if side == "BUY" else origin_level + stop_distance
+        candidates.append(
+            {
+                "pair": instrument,
+                "side": side,
+                "timeframe_context": "Daily / 4H / 1H",
+                "detected_at": breakout_candle["time"],
+                "entry": format_price(instrument, origin_level),
+                "stop_loss": format_price(instrument, stop_loss),
+                "take_profit": format_price(instrument, extreme),
+                "indication_level": format_price(instrument, level),
+                "indication_extreme": format_price(instrument, extreme),
+                "bias_notes": (
+                    f"Daily bias: {timeframe_bias(daily)}, 4H bias: {timeframe_bias(h4)}, "
+                    f"1H breakout from recent {'high' if side == 'BUY' else 'low'}"
+                ),
+                "breakout_index": breakout_index,
+            }
+        )
+
+    if not candidates:
         return None
 
-    side: str | None = None
-    indication_level: float | None = None
-    indication_extreme: float | None = None
-    entry: float | None = None
-
-    if recent_h1["high"] > recent_high:
-        side = "BUY"
-        indication_level = recent_high
-        indication_extreme = recent_h1["high"]
-        entry = recent_high
-    elif recent_h1["low"] < recent_low:
-        side = "SELL"
-        indication_level = recent_low
-        indication_extreme = recent_h1["low"]
-        entry = recent_low
-    else:
+    candidates.sort(key=lambda item: item["breakout_index"], reverse=True)
+    signal = candidates[0]
+    if not signal_is_fresh(signal["detected_at"]):
         return None
-
-    pip = pip_size(instrument)
-    stop_distance = 50 * pip
-    stop_loss = entry - stop_distance if side == "BUY" else entry + stop_distance
-    take_profit = indication_extreme
-
-    return {
-        "pair": instrument,
-        "side": side,
-        "timeframe_context": "Daily / 4H / 1H",
-        "detected_at": recent_h1["time"],
-        "entry": format_price(instrument, entry),
-        "stop_loss": format_price(instrument, stop_loss),
-        "take_profit": format_price(instrument, take_profit),
-        "indication_level": format_price(instrument, indication_level),
-        "indication_extreme": format_price(instrument, indication_extreme),
-        "bias_notes": f"Daily candles: {len(daily)}, 4H candles: {len(h4)}, 1H candles: {len(h1)}",
-    }
+    signal.pop("breakout_index", None)
+    return signal
 
 
 def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
@@ -357,13 +415,23 @@ def start_tracking():
         return redirect(url_for("dashboard", flash=f"Tracking started, but scan failed: {exc}", kind="error"))
 
     pair = control["selected_instrument"]
-    state[pair] = {
-        "tracking": True,
-        "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "last_scan_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "last_signal_side": signal.get("side") if signal else None,
-        "last_signal_time": signal.get("detected_at") if signal else None,
-    }
+    pair_state = state.get(pair, {}) if isinstance(state.get(pair), dict) else {}
+    pair_state.update(
+        {
+            "tracking": True,
+            "started_at": pair_state.get("started_at") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_scan_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_signal_side": signal.get("side") if signal else None,
+            "last_signal_time": signal.get("detected_at") if signal else None,
+            "signal_active": bool(signal),
+        }
+    )
+    if signal:
+        pair_state["active_signal"] = signal
+        pair_state.pop("last_error", None)
+    else:
+        pair_state.pop("active_signal", None)
+    state[pair] = pair_state
     save_json(STATE_FILE, state)
 
     signal_store = load_json(SIGNALS_FILE, {"signals": []})
@@ -373,7 +441,7 @@ def start_tracking():
         save_json(SIGNALS_FILE, signal_store)
         return redirect(url_for("dashboard", flash=f"Tracking {pair}, signal updated", kind="success"))
     save_json(SIGNALS_FILE, signal_store)
-    return redirect(url_for("dashboard", flash=f"Tracking {pair}, no active indication found", kind="success"))
+    return redirect(url_for("dashboard", flash=f"Tracking {pair}, no fresh ICC indication found", kind="success"))
 
 
 @app.post("/stop")
