@@ -1,0 +1,7 @@
+.oanda_env
+dashboard_control.json
+signals.json
+state.json
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,3 @@
+export OANDA_API_BASE='https://api-fxpractice.oanda.com/v3'
+export OANDA_API_KEY=''
+export OANDA_ACCOUNT_ID=''

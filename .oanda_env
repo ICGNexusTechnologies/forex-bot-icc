@@ -1,3 +1,0 @@
-export OANDA_API_BASE='https://api-fxpractice.oanda.com/v3'
-export OANDA_API_KEY='ef3ff3dc8623edda46a1f7b2f8f3b979-7965439fc3b656a6855d90e0e2cdc713'
-export OANDA_ACCOUNT_ID='101-001-30510930-001'
