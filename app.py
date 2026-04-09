@@ -59,10 +59,7 @@ BASE_HTML = """<!doctype html>
       background: linear-gradient(180deg, #040915 0%, #07111f 100%);
       color: var(--text);
     }
-    html, body {
-      min-height: 100%;
-    }
-    .wrap { width: 100%; max-width: none; margin: 0; padding: 24px 28px 40px; min-height: 100vh; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; min-height: 100vh; }
     .hero, .card {
       background: linear-gradient(180deg, rgba(15,27,49,.96), rgba(11,21,39,.96));
       border: 1px solid var(--border);
@@ -72,7 +69,7 @@ BASE_HTML = """<!doctype html>
     .hero { padding: 22px; margin-bottom: 16px; }
     .hero h1 { margin: 0 0 8px; font-size: 1.4rem; }
     .hero p { margin: 0; color: var(--muted); line-height: 1.5; }
-    .grid { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
     .card { padding: 18px; }
     .title { margin: 0 0 14px; font-size: .95rem; font-weight: 800; }
     .label { font-size: .74rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .08em; }
@@ -187,7 +184,6 @@ BASE_HTML = """<!doctype html>
     .flash.success { background: rgba(34,197,94,.12); color: #bbf7d0; }
     .flash.error { background: rgba(239,68,68,.12); color: #fecaca; }
     @media (max-width: 900px) {
-      .wrap { padding: 16px; }
       .grid { grid-template-columns: 1fr; }
       .stats, .signal-grid { grid-template-columns: 1fr; }
     }
