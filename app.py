@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import subprocess
+import sys
+
 from flask import Flask, redirect, render_template_string, request, url_for
 
 BOT_ROOT = Path(__file__).resolve().parent
@@ -156,6 +159,11 @@ BASE_HTML = """<!doctype html>
 </head>
 <body>
   <div class=\"wrap\">{{ body|safe }}</div>
+  <script>
+    setTimeout(() => {
+      window.location.reload();
+    }, 60000);
+  </script>
 </body>
 </html>
 """
@@ -438,9 +446,14 @@ def start_tracking():
     signal_store["signals"] = [s for s in signal_store.get("signals", []) if s.get("pair") != pair]
     if signal:
         signal_store["signals"].insert(0, signal)
-        save_json(SIGNALS_FILE, signal_store)
-        return redirect(url_for("dashboard", flash=f"Tracking {pair}, signal updated", kind="success"))
     save_json(SIGNALS_FILE, signal_store)
+
+    live_bot_running = subprocess.run(["pgrep", "-f", "forex-bot-icc/live_bot.py"], capture_output=True, text=True)
+    if live_bot_running.returncode != 0:
+        subprocess.Popen([sys.executable, str(BOT_ROOT / "live_bot.py")], cwd=BOT_ROOT)
+
+    if signal:
+        return redirect(url_for("dashboard", flash=f"Tracking {pair}, signal updated", kind="success"))
     return redirect(url_for("dashboard", flash=f"Tracking {pair}, no fresh ICC indication found", kind="success"))
 
 
@@ -449,6 +462,7 @@ def stop_tracking():
     control = load_control()
     control["status"] = "idle"
     save_control(control)
+    subprocess.run(["pkill", "-f", "forex-bot-icc/live_bot.py"], capture_output=True)
     return redirect(url_for("dashboard", flash="Tracking stopped", kind="success"))
 
 

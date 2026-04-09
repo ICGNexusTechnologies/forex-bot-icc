@@ -10,9 +10,28 @@ Separate ICC signal dashboard project.
 - Dashboard is intended to show BUY/SELL, entry, stop loss, and take profit for ICC setups
 
 ## Current status
-This is the initial dashboard scaffold.
+This now includes:
+- dashboard
+- first-pass ICC scan logic
+- continuous rescanning while tracking is enabled
+- setup, launch, and stop scripts
 
-## Run
+## First-time setup
+```bash
+./setup_forex_bot_icc.command
+```
+
+## Launch
+```bash
+./launch_forex_bot_icc.command
+```
+
+## Stop
+```bash
+./stop_forex_bot_icc.command
+```
+
+Or run manually:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
