@@ -400,6 +400,16 @@ def parse_oanda_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def format_display_time(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        dt = parse_oanda_time(value)
+        return dt.astimezone().strftime("%b %d, %Y %I:%M:%S %p")
+    except Exception:
+        return value
+
+
 def find_origin_level(candles: list[dict[str, Any]], breakout_index: int, side: str) -> float | None:
     if breakout_index <= 0:
         return None
@@ -764,7 +774,17 @@ def dashboard():
 
             <div class=\"card\" style=\"margin-top:16px;\">
               <h2 class=\"title\">Tracked State</h2>
-              <div class=\"help\" style=\"white-space:pre-wrap;\">{{ tracked_state }}</div>
+              <div class=\"signal-grid\">
+                <div class=\"metric\"><div class=\"k\">Tracking</div><div class=\"v\">{{ 'Active' if pair_state.tracking else 'Stopped' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Signal Status</div><div class=\"v\">{{ 'Active' if pair_state.signal_active else 'No Active Signal' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Started</div><div class=\"v\">{{ started_at_display }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Last Scan</div><div class=\"v\">{{ last_scan_display }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Last Side</div><div class=\"v\">{{ pair_state.last_signal_side or '—' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Last Signal Time</div><div class=\"v\">{{ last_signal_time_display }}</div></div>
+              </div>
+              {% if pair_state.last_error %}
+                <div class=\"flash error\" style=\"margin-top:12px;\">{{ pair_state.last_error }}</div>
+              {% endif %}
             </div>
           </div>
         </div>
@@ -775,7 +795,10 @@ def dashboard():
         tracked_count=(1 if active_pair and isinstance(state.get(active_pair), dict) and state.get(active_pair, {}).get("tracking") else 0),
         signal_count=len(active_signals),
         latest_signal=latest_signal,
-        tracked_state=json.dumps(state.get(active_pair, {}), indent=2) if state.get(active_pair) else "No tracking state saved yet.",
+        pair_state=(state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}),
+        started_at_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("started_at")),
+        last_scan_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("last_scan_at")),
+        last_signal_time_display=format_display_time((state.get(active_pair, {}) if isinstance(state.get(active_pair), dict) else {}).get("last_signal_time")),
         flash=request.args.get("flash", ""),
         kind=request.args.get("kind", "success"),
         instrument_error=instrument_error,
