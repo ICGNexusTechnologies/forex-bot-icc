@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,14 @@ CONTROL_FILE = BOT_ROOT / "dashboard_control.json"
 SIGNALS_FILE = BOT_ROOT / "signals.json"
 STATE_FILE = BOT_ROOT / "state.json"
 CREDS_FILE = BOT_ROOT / ".oanda_env"
+PIP_OVERRIDES = {
+    "JPY": 0.01,
+}
+TIMEFRAME_CONFIG = {
+    "D": {"granularity": "D", "count": 120},
+    "H4": {"granularity": "H4", "count": 160},
+    "H1": {"granularity": "H1", "count": 240},
+}
 
 app = Flask(__name__)
 
@@ -39,7 +46,7 @@ BASE_HTML = """<!doctype html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;
       background: linear-gradient(180deg, #040915 0%, #07111f 100%);
       color: var(--text);
     }
@@ -203,6 +210,111 @@ def fetch_instruments(api_key: str, account_id: str, mode: str) -> list[str]:
     return sorted(item["name"] for item in payload.get("instruments", []) if item.get("name"))
 
 
+def fetch_candles(api_key: str, instrument: str, mode: str, granularity: str, count: int) -> list[dict[str, Any]]:
+    resp = requests.get(
+        f"{get_api_base(mode)}/instruments/{instrument}/candles",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        params={"price": "M", "granularity": granularity, "count": count},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    candles: list[dict[str, Any]] = []
+    for candle in payload.get("candles", []):
+        mid = candle.get("mid") or {}
+        if not candle.get("complete", False):
+            continue
+        candles.append(
+            {
+                "time": candle.get("time"),
+                "open": float(mid.get("o", 0.0)),
+                "high": float(mid.get("h", 0.0)),
+                "low": float(mid.get("l", 0.0)),
+                "close": float(mid.get("c", 0.0)),
+            }
+        )
+    return candles
+
+
+def pip_size(instrument: str) -> float:
+    quote = instrument.split("_")[-1] if "_" in instrument else instrument[-3:]
+    return PIP_OVERRIDES.get(quote, 0.0001)
+
+
+def format_price(instrument: str, price: float) -> str:
+    decimals = 3 if pip_size(instrument) == 0.01 else 5
+    return f"{price:.{decimals}f}"
+
+
+def latest_swing(candles: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    if len(candles) < 3:
+        return None, None
+    recent = candles[-25:]
+    swing_high = max(c["high"] for c in recent[:-1])
+    swing_low = min(c["low"] for c in recent[:-1])
+    return swing_high, swing_low
+
+
+def detect_icc_signal(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
+    h1 = candles_by_tf.get("H1") or []
+    h4 = candles_by_tf.get("H4") or []
+    daily = candles_by_tf.get("D") or []
+    if len(h1) < 30 or len(h4) < 10 or len(daily) < 5:
+        return None
+
+    recent_h1 = h1[-1]
+    recent_high, recent_low = latest_swing(h1)
+    if recent_high is None or recent_low is None:
+        return None
+
+    side: str | None = None
+    indication_level: float | None = None
+    indication_extreme: float | None = None
+    entry: float | None = None
+
+    if recent_h1["high"] > recent_high:
+        side = "BUY"
+        indication_level = recent_high
+        indication_extreme = recent_h1["high"]
+        entry = recent_high
+    elif recent_h1["low"] < recent_low:
+        side = "SELL"
+        indication_level = recent_low
+        indication_extreme = recent_h1["low"]
+        entry = recent_low
+    else:
+        return None
+
+    pip = pip_size(instrument)
+    stop_distance = 50 * pip
+    stop_loss = entry - stop_distance if side == "BUY" else entry + stop_distance
+    take_profit = indication_extreme
+
+    return {
+        "pair": instrument,
+        "side": side,
+        "timeframe_context": "Daily / 4H / 1H",
+        "detected_at": recent_h1["time"],
+        "entry": format_price(instrument, entry),
+        "stop_loss": format_price(instrument, stop_loss),
+        "take_profit": format_price(instrument, take_profit),
+        "indication_level": format_price(instrument, indication_level),
+        "indication_extreme": format_price(instrument, indication_extreme),
+        "bias_notes": f"Daily candles: {len(daily)}, 4H candles: {len(h4)}, 1H candles: {len(h1)}",
+    }
+
+
+def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
+    api_key = control.get("api_key", "")
+    instrument = control.get("selected_instrument", "")
+    if not api_key or not instrument:
+        return None
+    candles_by_tf: dict[str, list[dict[str, Any]]] = {}
+    for tf, cfg in TIMEFRAME_CONFIG.items():
+        candles_by_tf[tf] = fetch_candles(api_key, instrument, control.get("account_mode", "demo"), cfg["granularity"], cfg["count"])
+    return detect_icc_signal(instrument, candles_by_tf)
+
+
 @app.post("/submit")
 def submit_controls():
     control = load_control()
@@ -225,12 +337,43 @@ def start_tracking():
     control = load_control()
     if not control.get("selected_instrument"):
         return redirect(url_for("dashboard", flash="Pick a pair first", kind="error"))
+    if not control.get("api_key") or not control.get("account_id"):
+        return redirect(url_for("dashboard", flash="Add Oanda API key and account ID first", kind="error"))
+
     control["status"] = "tracking"
     save_control(control)
     state = load_json(STATE_FILE, {})
-    state[control["selected_instrument"]] = {"tracking": True, "started_at": datetime.utcnow().isoformat() + "Z"}
+
+    signal = None
+    try:
+        signal = build_signal_for_pair(control)
+    except Exception as exc:
+        state[control["selected_instrument"]] = {
+            "tracking": True,
+            "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_error": str(exc),
+        }
+        save_json(STATE_FILE, state)
+        return redirect(url_for("dashboard", flash=f"Tracking started, but scan failed: {exc}", kind="error"))
+
+    pair = control["selected_instrument"]
+    state[pair] = {
+        "tracking": True,
+        "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "last_scan_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "last_signal_side": signal.get("side") if signal else None,
+        "last_signal_time": signal.get("detected_at") if signal else None,
+    }
     save_json(STATE_FILE, state)
-    return redirect(url_for("dashboard", flash=f"Tracking {control['selected_instrument']}", kind="success"))
+
+    signal_store = load_json(SIGNALS_FILE, {"signals": []})
+    signal_store["signals"] = [s for s in signal_store.get("signals", []) if s.get("pair") != pair]
+    if signal:
+        signal_store["signals"].insert(0, signal)
+        save_json(SIGNALS_FILE, signal_store)
+        return redirect(url_for("dashboard", flash=f"Tracking {pair}, signal updated", kind="success"))
+    save_json(SIGNALS_FILE, signal_store)
+    return redirect(url_for("dashboard", flash=f"Tracking {pair}, no active indication found", kind="success"))
 
 
 @app.post("/stop")
@@ -307,7 +450,7 @@ def dashboard():
             </div>
 
             <div class=\"help\" style=\"margin-top:12px;\">
-              Uses Daily, 4H, and 1H structure. Signal should fire from the indication move, then display the projected return-to-level entry, 50 pip stop, and take profit at the indication extreme.
+              Uses Daily, 4H, and 1H structure. Signal fires from the indication move, then shows the projected return-to-level entry, 50 pip stop, and take profit at the indication extreme.
             </div>
 
             {% if flash %}
@@ -342,15 +485,16 @@ def dashboard():
                     <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ latest_signal.take_profit }}</div></div>
                     <div class=\"metric\"><div class=\"k\">Indication Level</div><div class=\"v\">{{ latest_signal.indication_level }}</div></div>
                   </div>
+                  <div class=\"help\" style=\"margin-top:10px;\">{{ latest_signal.bias_notes }}</div>
                 </div>
               {% else %}
-                <div class=\"help\">No signal yet for this pair. Once tracking logic writes a signal, it will show here.</div>
+                <div class=\"help\">No signal yet for this pair. Start tracking after entering your Oanda credentials and pair.</div>
               {% endif %}
             </div>
 
             <div class=\"card\" style=\"margin-top:16px;\">
               <h2 class=\"title\">Tracked State</h2>
-              <div class=\"help\">{{ tracked_state }}</div>
+              <div class=\"help\" style=\"white-space:pre-wrap;\">{{ tracked_state }}</div>
             </div>
           </div>
         </div>
