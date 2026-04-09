@@ -750,8 +750,10 @@ def start_tracking():
     state = load_json(STATE_FILE, {})
 
     signal = None
+    phase_state = None
     try:
         signal = build_signal_for_pair(control)
+        phase_state = build_phase_state_for_pair(control)
     except Exception as exc:
         state[control["selected_instrument"]] = {
             "tracking": True,
@@ -805,7 +807,11 @@ def start_tracking():
 
     if signal:
         return redirect(url_for("dashboard", flash=f"Tracking {pair}, signal updated", kind="success"))
-    return redirect(url_for("dashboard", flash=f"Tracking {pair}, no fresh ICC indication found", kind="success"))
+    if phase_state and phase_state.get("indication") and phase_state.get("correction"):
+        return redirect(url_for("dashboard", flash=f"Tracking {pair}, indication and correction found, waiting for continuation", kind="success"))
+    if phase_state and phase_state.get("indication"):
+        return redirect(url_for("dashboard", flash=f"Tracking {pair}, indication found, waiting for correction", kind="success"))
+    return redirect(url_for("dashboard", flash=f"Tracking {pair}, no fresh ICC setup found", kind="success"))
 
 
 @app.post("/stop")
