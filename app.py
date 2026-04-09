@@ -613,18 +613,18 @@ def dashboard():
               {% endif %}
 
               {% if instruments %}
-              <div class=\"favorites\">
+              <div>
                 <div class=\"label\">Favorites</div>
-                <div class=\"help\">Click the star to save or remove a favorite.</div>
                 <div class=\"favorites-list\">
                   {% for instrument in instruments %}
                     <label class=\"favorite-row\">
                       <span>{{ instrument }}</span>
-                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ instrument }}\" {% if instrument in favorites %}checked{% endif %} />
+                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ instrument }}\" {% if instrument in favorites %}checked{% endif %} style=\"display:none;\" />
                       <span class=\"star-btn {% if instrument not in favorites %}off{% endif %}\">{{ '★' if instrument in favorites else '☆' }}</span>
                     </label>
                   {% endfor %}
                 </div>
+                <div class=\"help\" style=\"margin-top:8px;\">Click the star to save or remove a favorite.</div>
               </div>
               {% endif %}
             </form>
