@@ -89,6 +89,16 @@ BASE_HTML = """<!doctype html>
       border-radius: 12px; padding: 10px 12px; font-size: .9rem; margin-bottom: 12px;
     }
     .btnrow { display: flex; gap: 10px; flex-wrap: wrap; }
+    .favorites-list { display:grid; gap:6px; max-height:220px; overflow:auto; padding-right:2px; }
+    .favorite-row {
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      padding:7px 10px; border-radius:10px; background: rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.05);
+    }
+    .star-btn {
+      appearance:none; border:none; background:transparent; cursor:pointer; font-size:16px; line-height:1;
+      color:#fbbf24; padding:0;
+    }
+    .star-btn.off { color:#64748b; }
     button {
       border: none;
       border-radius: 12px;
@@ -167,6 +177,19 @@ BASE_HTML = """<!doctype html>
     setTimeout(() => {
       window.location.reload();
     }, 60000);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.favorite-row').forEach((row) => {
+        const checkbox = row.querySelector('input[type="checkbox"]');
+        const star = row.querySelector('.star-btn');
+        if (!checkbox || !star) return;
+        row.addEventListener('click', () => {
+          checkbox.checked = !checkbox.checked;
+          star.textContent = checkbox.checked ? '★' : '☆';
+          star.classList.toggle('off', !checkbox.checked);
+        });
+      });
+    });
   </script>
 </body>
 </html>
@@ -490,11 +513,14 @@ def dashboard():
         except Exception as exc:
             instrument_error = str(exc)
     active_pair = control.get("selected_instrument", "")
-    favorites = [active_pair] if active_pair else []
+    favorites = control.get("favorites", [])
+    if not isinstance(favorites, list):
+        favorites = []
     if instruments and active_pair and active_pair not in instruments:
         instruments = [active_pair] + [instrument for instrument in instruments if instrument != active_pair]
-    favorite_names = [name for name in favorites if name in instruments]
-    remaining_instruments = [name for name in instruments if name not in favorite_names]
+    instrument_names = instruments[:]
+    favorite_names = [name for name in favorites if name in instrument_names] or favorites
+    remaining_instruments = [name for name in instrument_names if name not in favorite_names]
 
     active_signals = [s for s in signals if s.get("pair") == active_pair]
     latest_signal = active_signals[0] if active_signals else None
@@ -533,15 +559,15 @@ def dashboard():
                   <option value=\"\">Select a pair</option>
                   {% if favorite_names %}
                     <optgroup label=\"Favorites\">
-                      {% for instrument in favorite_names %}
-                        <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>★ {{ instrument }}</option>
+                      {% for name in favorite_names %}
+                        <option value=\"{{ name }}\" {% if name == control.selected_instrument %}selected{% endif %}>★ {{ name }}</option>
                       {% endfor %}
                     </optgroup>
                   {% endif %}
                   {% if remaining_instruments %}
-                    <optgroup label=\"All Oanda Pairs\">
-                      {% for instrument in remaining_instruments %}
-                        <option value=\"{{ instrument }}\" {% if instrument == active_pair %}selected{% endif %}>{{ instrument }}</option>
+                    <optgroup label=\"All OANDA Instruments\">
+                      {% for name in remaining_instruments %}
+                        <option value=\"{{ name }}\" {% if name == control.selected_instrument %}selected{% endif %}>{{ name }}</option>
                       {% endfor %}
                     </optgroup>
                   {% endif %}
@@ -549,6 +575,21 @@ def dashboard():
                   <option value=\"\" selected>Submit Oanda credentials to load pairs</option>
                 {% endif %}
               </select>
+              <div class=\"help\" style=\"margin-top:8px;\">Saved favorites: <strong>{{ favorite_names|join(', ') if favorite_names else 'None' }}</strong></div>
+
+              <div>
+                <div class=\"label\">Favorites</div>
+                <div class=\"favorites-list\">
+                  {% for name in instrument_names %}
+                    <label class=\"favorite-row\">
+                      <span>{{ name }}</span>
+                      <input type=\"checkbox\" name=\"favorite_instruments\" value=\"{{ name }}\" {% if name in favorites %}checked{% endif %} style=\"display:none;\" />
+                      <span class=\"star-btn {% if name not in favorites %}off{% endif %}\">{{ '★' if name in favorites else '☆' }}</span>
+                    </label>
+                  {% endfor %}
+                </div>
+                <div class=\"help\" style=\"margin-top:8px;\">Click the star to save or remove a favorite.</div>
+              </div>
 
               <div class=\"btnrow\">
                 <button type=\"submit\">Submit</button>
@@ -626,6 +667,7 @@ def dashboard():
         instrument_error=instrument_error,
         status_class=status_class,
         status_label=status_label,
+        instrument_names=instrument_names,
         favorites=favorites,
         favorite_names=favorite_names,
         remaining_instruments=remaining_instruments,
