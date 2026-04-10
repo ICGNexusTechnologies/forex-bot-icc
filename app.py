@@ -25,14 +25,12 @@ TIMEFRAME_CONFIG = {
     "D": {"granularity": "D", "count": 120},
     "H4": {"granularity": "H4", "count": 160},
     "H1": {"granularity": "H1", "count": 240},
-    "M15": {"granularity": "M15", "count": 320},
 }
 SWING_LOOKBACK = {
-    "D": 20,
-    "H4": 24,
     "H1": 30,
 }
 MAX_SIGNAL_AGE_HOURS = 12
+LEG_CONFIRM_CANDLES = 2
 
 app = Flask(__name__)
 
@@ -491,9 +489,9 @@ def timeframe_bias(candles: list[dict[str, Any]]) -> str:
     return "neutral"
 
 
-def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int) -> tuple[int | None, float | None, float | None]:
+def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int) -> dict[str, Any] | None:
     if len(candles) < 5:
-        return None, None, None
+        return None
     start = max(2, len(candles) - lookback)
     for idx in range(len(candles) - 1, start - 1, -1):
         candle = candles[idx]
@@ -509,8 +507,38 @@ def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int
             if reference_idx is None:
                 continue
             reference = candles[reference_idx]["high"]
-            if body_high > reference:
-                return idx, reference, candle["high"]
+            if body_high <= reference:
+                continue
+
+            origin_idx = None
+            for candidate_idx in range(reference_idx, 0, -1):
+                candidate = candles[candidate_idx]
+                candidate_high = candidate["high"]
+                future = candles[candidate_idx + 1 : idx + 1]
+                if len(future) < LEG_CONFIRM_CANDLES:
+                    continue
+                if any(next_candle["low"] <= candidate_high for next_candle in future):
+                    continue
+                sustain = future[:LEG_CONFIRM_CANDLES]
+                if len(sustain) < LEG_CONFIRM_CANDLES:
+                    continue
+                if all(next_candle["low"] > candidate_high for next_candle in sustain):
+                    origin_idx = candidate_idx
+            if origin_idx is None:
+                continue
+            origin_candle = candles[origin_idx]
+            return {
+                "side": side,
+                "breakout_index": idx,
+                "reference_index": reference_idx,
+                "origin_index": origin_idx,
+                "break_level": reference,
+                "origin_price": origin_candle["open"],
+                "origin_secondary_price": origin_candle["high"],
+                "extreme": candle["high"],
+                "time": candle["time"],
+                "origin_time": origin_candle["time"],
+            }
         else:
             reference_idx = None
             for prev_idx in range(idx - 1, 1, -1):
@@ -520,9 +548,39 @@ def find_recent_breakout(candles: list[dict[str, Any]], side: str, lookback: int
             if reference_idx is None:
                 continue
             reference = candles[reference_idx]["low"]
-            if body_low < reference:
-                return idx, reference, candle["low"]
-    return None, None, None
+            if body_low >= reference:
+                continue
+
+            origin_idx = None
+            for candidate_idx in range(reference_idx, 0, -1):
+                candidate = candles[candidate_idx]
+                candidate_low = candidate["low"]
+                future = candles[candidate_idx + 1 : idx + 1]
+                if len(future) < LEG_CONFIRM_CANDLES:
+                    continue
+                if any(next_candle["high"] >= candidate_low for next_candle in future):
+                    continue
+                sustain = future[:LEG_CONFIRM_CANDLES]
+                if len(sustain) < LEG_CONFIRM_CANDLES:
+                    continue
+                if all(next_candle["high"] < candidate_low for next_candle in sustain):
+                    origin_idx = candidate_idx
+            if origin_idx is None:
+                continue
+            origin_candle = candles[origin_idx]
+            return {
+                "side": side,
+                "breakout_index": idx,
+                "reference_index": reference_idx,
+                "origin_index": origin_idx,
+                "break_level": reference,
+                "origin_price": origin_candle["open"],
+                "origin_secondary_price": origin_candle["low"],
+                "extreme": candle["low"],
+                "time": candle["time"],
+                "origin_time": origin_candle["time"],
+            }
+    return None
 
 
 def signal_is_fresh(signal_time: str) -> bool:
@@ -534,54 +592,222 @@ def signal_is_fresh(signal_time: str) -> bool:
     return age_hours <= MAX_SIGNAL_AGE_HOURS
 
 
-def find_m15_precontinuation_entry(
+def find_h1_correction_and_continuation(
     candles: list[dict[str, Any]],
-    indication_time: str,
+    breakout_index: int,
     indication_level: float,
     side: str,
-) -> tuple[str | None, str]:
-    if len(candles) < 8:
-        return None, "Not enough M15 candles"
-    try:
-        indication_dt = parse_oanda_time(indication_time)
-    except Exception:
-        return None, "Invalid indication time"
+) -> tuple[bool, str | None, str]:
+    if breakout_index >= len(candles) - 1:
+        return False, None, "Waiting for the next 1H candle after the breakout"
 
-    post = [c for c in candles if parse_oanda_time(c["time"]) >= indication_dt]
-    if len(post) < 4:
-        return None, "Waiting for correction after indication"
+    post = candles[breakout_index + 1 :]
+    if not post:
+        return False, None, "Waiting for correction after indication"
 
     if side == "BUY":
-        for idx in range(2, len(post)):
-            candle = post[idx]
-            if candle["low"] > indication_level:
-                continue
-            body_high = max(candle["open"], candle["close"])
-            body_low = min(candle["open"], candle["close"])
-            upper_wick = candle["high"] - body_high
-            lower_wick = body_low - candle["low"]
-            if body_high > indication_level and upper_wick >= lower_wick:
-                return candle["time"], "Correction hit the level and M15 turned back up"
-        return None, "Waiting for bullish turn in correction zone"
+        correction_candle = next((c for c in post if c["low"] <= indication_level), None)
+        if correction_candle is None:
+            return False, None, "Waiting for bullish correction back into the 1H breakout level"
+        continuation_candle = next(
+            (c for c in post if parse_oanda_time(c["time"]) > parse_oanda_time(correction_candle["time"]) and c["close"] > indication_level),
+            None,
+        )
+        if continuation_candle is None:
+            return True, None, "Correction found on 1H, waiting for bullish continuation"
+        return True, continuation_candle["time"], "1H correction completed and bullish continuation confirmed"
 
-    for idx in range(2, len(post)):
-        candle = post[idx]
-        if candle["high"] < indication_level:
+    correction_candle = next((c for c in post if c["high"] >= indication_level), None)
+    if correction_candle is None:
+        return False, None, "Waiting for bearish correction back into the 1H breakout level"
+    continuation_candle = next(
+        (c for c in post if parse_oanda_time(c["time"]) > parse_oanda_time(correction_candle["time"]) and c["close"] < indication_level),
+        None,
+    )
+    if continuation_candle is None:
+        return True, None, "Correction found on 1H, waiting for bearish continuation"
+    return True, continuation_candle["time"], "1H correction completed and bearish continuation confirmed"
+
+
+def build_indication_layers(
+    instrument: str,
+    candles: list[dict[str, Any]],
+    side: str,
+    origin_time: str | None,
+    origin_price: float,
+    origin_secondary_price: float,
+) -> list[dict[str, Any]]:
+    layers = [
+        {
+            "label": "Primary origin",
+            "kind": "origin",
+            "price": format_price(instrument, origin_price),
+            "range": f"{format_price(instrument, origin_price)} / {format_price(instrument, origin_secondary_price)}",
+            "level": format_price(instrument, origin_secondary_price),
+            "time": origin_time,
+            "display_time": format_display_time(origin_time),
+            "status": "active",
+        }
+    ]
+    min_gap = 20 * pip_size(instrument)
+    last_level = origin_secondary_price
+    derived_count = 0
+
+    for idx, candle in enumerate(candles):
+        if origin_time and candle.get("time") <= origin_time:
             continue
-        body_high = max(candle["open"], candle["close"])
-        body_low = min(candle["open"], candle["close"])
-        upper_wick = candle["high"] - body_high
-        lower_wick = body_low - candle["low"]
-        if body_low < indication_level and lower_wick >= upper_wick:
-            return candle["time"], "Correction hit the level and M15 turned back down"
-    return None, "Waiting for bearish turn in correction zone"
+        if side == "BUY":
+            if not is_swing_high(candles, idx):
+                continue
+            level = max(candle["open"], candle["close"])
+            if level <= last_level + min_gap:
+                continue
+            derived_count += 1
+            layers.append(
+                {
+                    "label": f"Resistance layer {derived_count}",
+                    "kind": "resistance",
+                    "price": format_price(instrument, level),
+                    "range": format_price(instrument, level),
+                    "level": format_price(instrument, level),
+                    "time": candle["time"],
+                    "display_time": format_display_time(candle["time"]),
+                    "status": "derived",
+                }
+            )
+            last_level = level
+        else:
+            if not is_swing_low(candles, idx):
+                continue
+            level = min(candle["open"], candle["close"])
+            if level >= last_level - min_gap:
+                continue
+            derived_count += 1
+            layers.append(
+                {
+                    "label": f"Support layer {derived_count}",
+                    "kind": "support",
+                    "price": format_price(instrument, level),
+                    "range": format_price(instrument, level),
+                    "level": format_price(instrument, level),
+                    "time": candle["time"],
+                    "display_time": format_display_time(candle["time"]),
+                    "status": "derived",
+                }
+            )
+            last_level = level
+
+    return layers
 
 
-def evaluate_icc_phases(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def build_locked_origin_result(
+    instrument: str,
+    candles_by_tf: dict[str, list[dict[str, Any]]],
+    locked_origin: dict[str, Any],
+) -> dict[str, Any]:
     h1 = candles_by_tf.get("H1") or []
     h4 = candles_by_tf.get("H4") or []
     daily = candles_by_tf.get("D") or []
-    m15 = candles_by_tf.get("M15") or []
+    side = (locked_origin.get("side") or "BUY").upper()
+    origin_price = float(locked_origin.get("origin_price"))
+    origin_secondary_price = float(locked_origin.get("origin_secondary_price", origin_price))
+    origin_time = locked_origin.get("origin_time")
+    relevant = [c for c in h1 if not origin_time or c.get("time") >= origin_time]
+    if not relevant:
+        relevant = h1
+
+    breakout_index = None
+    breakout_time = None
+    if side == "BUY":
+        for idx, candle in enumerate(h1):
+            if origin_time and candle.get("time") < origin_time:
+                continue
+            if candle["high"] > origin_secondary_price:
+                breakout_index = idx
+                breakout_time = candle["time"]
+                break
+        extreme = max((c["high"] for c in relevant), default=origin_secondary_price)
+    else:
+        for idx, candle in enumerate(h1):
+            if origin_time and candle.get("time") < origin_time:
+                continue
+            if candle["low"] < origin_secondary_price:
+                breakout_index = idx
+                breakout_time = candle["time"]
+                break
+        extreme = min((c["low"] for c in relevant), default=origin_secondary_price)
+
+    correction_found = False
+    continuation_time = None
+    continuation_note = locked_origin.get("note") or "Using locked origin anchor"
+    if breakout_index is not None:
+        correction_found, continuation_time, continuation_note = find_h1_correction_and_continuation(h1, breakout_index, origin_price, side)
+        if not correction_found:
+            continuation_note = locked_origin.get("note") or "Using locked origin anchor, waiting for correction"
+
+    indication_layers = build_indication_layers(
+        instrument,
+        h1,
+        side,
+        origin_time,
+        origin_price,
+        origin_secondary_price,
+    )
+    phase_state = {
+        "side": side,
+        "indication": True,
+        "correction": correction_found,
+        "continuation": continuation_time is not None,
+        "entry": format_price(instrument, origin_price),
+        "take_profit": format_price(instrument, extreme),
+        "indication_level": format_price(instrument, origin_price),
+        "origin_price": format_price(instrument, origin_price),
+        "origin_secondary_price": format_price(instrument, origin_secondary_price),
+        "origin_time": origin_time,
+        "break_level": format_price(instrument, origin_secondary_price),
+        "breakout_time": breakout_time,
+        "indication_layers": indication_layers,
+        "note": continuation_note,
+    }
+
+    result = {"signal": None, "phase_state": phase_state}
+    if continuation_time is None:
+        return result
+
+    pip = pip_size(instrument)
+    stop_distance = 50 * pip
+    stop_loss = origin_price - stop_distance if side == "BUY" else origin_price + stop_distance
+    signal = {
+        "pair": instrument,
+        "side": side,
+        "timeframe_context": "1H setup, 4H and Daily context",
+        "detected_at": continuation_time,
+        "entry": format_price(instrument, origin_price),
+        "stop_loss": format_price(instrument, stop_loss),
+        "take_profit": format_price(instrument, extreme),
+        "indication_level": format_price(instrument, origin_price),
+        "origin_price": format_price(instrument, origin_price),
+        "origin_secondary_price": format_price(instrument, origin_secondary_price),
+        "origin_time": origin_time,
+        "break_level": format_price(instrument, origin_secondary_price),
+        "breakout_time": breakout_time,
+        "indication_layers": indication_layers,
+        "indication_extreme": format_price(instrument, extreme),
+        "bias_notes": (
+            f"Locked 1H origin anchor. 4H bias: {timeframe_bias(h4) if h4 else 'n/a'}, "
+            f"Daily bias: {timeframe_bias(daily) if daily else 'n/a'}."
+        ),
+        "continuation_note": continuation_note,
+    }
+    if signal_is_fresh(signal["detected_at"]):
+        result["signal"] = signal
+    return result
+
+
+def evaluate_icc_phases(instrument: str, candles_by_tf: dict[str, list[dict[str, Any]]], locked_origin: dict[str, Any] | None = None) -> dict[str, Any]:
+    h1 = candles_by_tf.get("H1") or []
+    h4 = candles_by_tf.get("H4") or []
+    daily = candles_by_tf.get("D") or []
     result: dict[str, Any] = {
         "signal": None,
         "phase_state": {
@@ -592,50 +818,54 @@ def evaluate_icc_phases(instrument: str, candles_by_tf: dict[str, list[dict[str,
             "entry": None,
             "take_profit": None,
             "indication_level": None,
-            "note": "No valid setup yet",
+            "origin_price": None,
+            "origin_secondary_price": None,
+            "origin_time": None,
+            "break_level": None,
+            "breakout_time": None,
+            "indication_layers": [],
+            "note": "No valid 1H setup yet",
         },
     }
-    if len(h1) < 40 or len(h4) < 20 or len(daily) < 10 or len(m15) < 20:
-        result["phase_state"]["note"] = "Not enough market data yet"
+    if len(h1) < 40:
+        result["phase_state"]["note"] = "Not enough 1H market data yet"
         return result
+    if locked_origin:
+        return build_locked_origin_result(instrument, candles_by_tf, locked_origin)
 
-    buy_idx, buy_level, buy_extreme = find_recent_breakout(h1, "BUY", SWING_LOOKBACK["H1"])
-    sell_idx, sell_level, sell_extreme = find_recent_breakout(h1, "SELL", SWING_LOOKBACK["H1"])
+    buy_breakout = find_recent_breakout(h1, "BUY", SWING_LOOKBACK["H1"])
+    sell_breakout = find_recent_breakout(h1, "SELL", SWING_LOOKBACK["H1"])
 
-    candidates = [
-        ("BUY", buy_idx, buy_level, buy_extreme),
-        ("SELL", sell_idx, sell_level, sell_extreme),
-    ]
     freshest = None
-    for side, breakout_index, level, extreme in candidates:
-        if breakout_index is None or level is None or extreme is None:
+    for candidate in [buy_breakout, sell_breakout]:
+        if not candidate:
             continue
-        breakout_candle = h1[breakout_index]
-        if freshest is None or breakout_candle["time"] > freshest["time"]:
-            freshest = {
-                "side": side,
-                "breakout_index": breakout_index,
-                "level": level,
-                "extreme": extreme,
-                "time": breakout_candle["time"],
-            }
+        if freshest is None or candidate["time"] > freshest["time"]:
+            freshest = candidate
 
     if freshest is None:
         return result
 
     side = freshest["side"]
-    level = freshest["level"]
+    origin_price = freshest["origin_price"]
+    break_level = freshest["break_level"]
     extreme = freshest["extreme"]
     breakout_time = freshest["time"]
-    continuation_time, continuation_note = find_m15_precontinuation_entry(m15, breakout_time, level, side)
+    correction_found, continuation_time, continuation_note = find_h1_correction_and_continuation(h1, freshest["breakout_index"], origin_price, side)
     phase_state = {
         "side": side,
         "indication": True,
-        "correction": "correction" in continuation_note.lower() or "zone" in continuation_note.lower(),
+        "correction": correction_found,
         "continuation": continuation_time is not None,
-        "entry": format_price(instrument, level),
+        "entry": format_price(instrument, origin_price),
         "take_profit": format_price(instrument, extreme),
-        "indication_level": format_price(instrument, level),
+        "indication_level": format_price(instrument, origin_price),
+        "origin_price": format_price(instrument, origin_price),
+        "origin_secondary_price": None,
+        "origin_time": freshest["origin_time"],
+        "break_level": format_price(instrument, break_level),
+        "breakout_time": breakout_time,
+        "indication_layers": [],
         "note": continuation_note,
     }
     result["phase_state"] = phase_state
@@ -645,21 +875,25 @@ def evaluate_icc_phases(instrument: str, candles_by_tf: dict[str, list[dict[str,
 
     pip = pip_size(instrument)
     stop_distance = 50 * pip
-    stop_loss = level - stop_distance if side == "BUY" else level + stop_distance
+    stop_loss = origin_price - stop_distance if side == "BUY" else origin_price + stop_distance
     signal = {
         "pair": instrument,
         "side": side,
-        "timeframe_context": "Daily / 4H / 1H / 15M",
+        "timeframe_context": "1H setup, 4H and Daily context",
         "detected_at": continuation_time,
-        "entry": format_price(instrument, level),
+        "entry": format_price(instrument, origin_price),
         "stop_loss": format_price(instrument, stop_loss),
         "take_profit": format_price(instrument, extreme),
-        "indication_level": format_price(instrument, level),
+        "indication_level": format_price(instrument, origin_price),
+        "origin_price": format_price(instrument, origin_price),
+        "origin_time": freshest["origin_time"],
+        "break_level": format_price(instrument, break_level),
+        "breakout_time": breakout_time,
         "indication_extreme": format_price(instrument, extreme),
         "bias_notes": (
-            f"Daily bias: {timeframe_bias(daily)}, 4H bias: {timeframe_bias(h4)}, "
-            f"1H body break through recent {'high' if side == 'BUY' else 'low'}, "
-            f"15M turn detected in correction zone"
+            f"1H indication, correction, and continuation drive the setup. "
+            f"4H bias: {timeframe_bias(h4) if h4 else 'n/a'}, Daily bias: {timeframe_bias(daily) if daily else 'n/a'}. "
+            f"1H origin at {format_price(instrument, origin_price)}, break level at {format_price(instrument, break_level)}, then 1H correction and continuation confirmation."
         ),
         "continuation_note": continuation_note,
     }
@@ -681,7 +915,10 @@ def build_signal_for_pair(control: dict[str, Any]) -> dict[str, Any] | None:
     candles_by_tf: dict[str, list[dict[str, Any]]] = {}
     for tf, cfg in TIMEFRAME_CONFIG.items():
         candles_by_tf[tf] = fetch_candles(api_key, instrument, control.get("account_mode", "demo"), cfg["granularity"], cfg["count"])
-    return detect_icc_signal(instrument, candles_by_tf)
+    state = load_json(STATE_FILE, {})
+    pair_state = state.get(instrument, {}) if isinstance(state.get(instrument), dict) else {}
+    locked_origin = pair_state.get("locked_origin") if isinstance(pair_state.get("locked_origin"), dict) else None
+    return evaluate_icc_phases(instrument, candles_by_tf, locked_origin=locked_origin).get("signal")
 
 
 def build_phase_state_for_pair(control: dict[str, Any]) -> dict[str, Any]:
@@ -696,12 +933,21 @@ def build_phase_state_for_pair(control: dict[str, Any]) -> dict[str, Any]:
             "entry": None,
             "take_profit": None,
             "indication_level": None,
+            "origin_price": None,
+            "origin_secondary_price": None,
+            "origin_time": None,
+            "break_level": None,
+            "breakout_time": None,
+            "indication_layers": [],
             "note": "Missing pair or Oanda credentials",
         }
     candles_by_tf: dict[str, list[dict[str, Any]]] = {}
     for tf, cfg in TIMEFRAME_CONFIG.items():
         candles_by_tf[tf] = fetch_candles(api_key, instrument, control.get("account_mode", "demo"), cfg["granularity"], cfg["count"])
-    return evaluate_icc_phases(instrument, candles_by_tf).get("phase_state") or {
+    state = load_json(STATE_FILE, {})
+    pair_state = state.get(instrument, {}) if isinstance(state.get(instrument), dict) else {}
+    locked_origin = pair_state.get("locked_origin") if isinstance(pair_state.get("locked_origin"), dict) else None
+    return evaluate_icc_phases(instrument, candles_by_tf, locked_origin=locked_origin).get("phase_state") or {
         "side": None,
         "indication": False,
         "correction": False,
@@ -709,6 +955,12 @@ def build_phase_state_for_pair(control: dict[str, Any]) -> dict[str, Any]:
         "entry": None,
         "take_profit": None,
         "indication_level": None,
+        "origin_price": None,
+        "origin_secondary_price": None,
+        "origin_time": None,
+        "break_level": None,
+        "breakout_time": None,
+        "indication_layers": [],
         "note": "No valid setup yet",
     }
 
@@ -781,6 +1033,8 @@ def start_tracking():
         pair_state.pop("last_error", None)
     else:
         pair_state.pop("active_signal", None)
+    if phase_state:
+        pair_state["indication_layers"] = phase_state.get("indication_layers", [])
     state[pair] = pair_state
     save_json(STATE_FILE, state)
 
@@ -856,6 +1110,12 @@ def dashboard():
         "entry": None,
         "take_profit": None,
         "indication_level": None,
+        "origin_price": None,
+        "origin_secondary_price": None,
+        "origin_time": None,
+        "break_level": None,
+        "breakout_time": None,
+        "indication_layers": [],
         "note": "Missing pair or Oanda credentials",
     }
     status_class = "green" if control.get("status") == "tracking" else "amber"
@@ -956,7 +1216,7 @@ def dashboard():
             </div>
 
             <div class=\"help\" style=\"margin-top:12px;\">
-              Uses Daily, 4H, and 1H structure. Signal fires from the indication move, then shows the projected return-to-level entry, 50 pip stop, and take profit at the indication extreme.
+              Uses a 1H-driven ICC structure. Indication, correction, and continuation all come from 1H. 4H and Daily are shown only as context. Signal fires from the indication move, then shows the projected return-to-level entry, 50 pip stop, and take profit at the indication extreme.
             </div>
 
             {% if flash %}
@@ -998,7 +1258,25 @@ def dashboard():
                 <div class="signal-grid" style="margin-top:12px;">
                   <div class="metric"><div class="k">Planned Entry</div><div class="v">{{ phase_state.entry or '—' }}</div></div>
                   <div class="metric"><div class="k">Planned TP</div><div class="v">{{ phase_state.take_profit or '—' }}</div></div>
-                  <div class="metric"><div class="k">Indication Level</div><div class="v">{{ phase_state.indication_level or '—' }}</div></div>
+                  <div class="metric"><div class="k">Origin Price</div><div class="v">{{ phase_state.origin_price or '—' }}</div></div>
+                  <div class="metric"><div class="k">Origin Range</div><div class="v">{{ (phase_state.origin_price ~ ' / ' ~ phase_state.origin_secondary_price) if phase_state.origin_secondary_price else (phase_state.origin_price or '—') }}</div></div>
+                  <div class="metric"><div class="k">Origin Time</div><div class="v">{{ phase_state.origin_time or '—' }}</div></div>
+                  <div class="metric"><div class="k">Break Level</div><div class="v">{{ phase_state.break_level or '—' }}</div></div>
+                  <div class="metric"><div class="k">Breakout Time</div><div class="v">{{ phase_state.breakout_time or '—' }}</div></div>
+                </div>
+                <div style="margin-top:12px; display:grid; gap:10px;">
+                  <div class="label">Indication Layers</div>
+                  {% if phase_state.indication_layers %}
+                    {% for layer in phase_state.indication_layers %}
+                      <div class="metric">
+                        <div class="k">{{ layer.label }}</div>
+                        <div class="v">{{ layer.range }}</div>
+                        <div class="help" style="margin-top:6px;">{{ layer.kind|capitalize }} · {{ layer.display_time }}</div>
+                      </div>
+                    {% endfor %}
+                  {% else %}
+                    <div class="help">No additional indication layers tracked yet.</div>
+                  {% endif %}
                 </div>
               </div>
               {% if latest_signal %}
@@ -1014,7 +1292,11 @@ def dashboard():
                     <div class="metric"><div class="k">Entry</div><div class="v">{{ latest_signal.entry }}</div></div>
                     <div class="metric"><div class="k">Stop Loss</div><div class="v">{{ latest_signal.stop_loss }}</div></div>
                     <div class="metric"><div class="k">Take Profit</div><div class="v">{{ latest_signal.take_profit }}</div></div>
-                    <div class="metric"><div class="k">Indication Level</div><div class="v">{{ latest_signal.indication_level }}</div></div>
+                    <div class="metric"><div class="k">Origin Price</div><div class="v">{{ latest_signal.origin_price }}</div></div>
+                    <div class="metric"><div class="k">Origin Range</div><div class="v">{{ (latest_signal.origin_price ~ ' / ' ~ latest_signal.origin_secondary_price) if latest_signal.origin_secondary_price else latest_signal.origin_price }}</div></div>
+                    <div class="metric"><div class="k">Origin Time</div><div class="v">{{ latest_signal.origin_time }}</div></div>
+                    <div class="metric"><div class="k">Break Level</div><div class="v">{{ latest_signal.break_level }}</div></div>
+                    <div class="metric"><div class="k">Breakout Time</div><div class="v">{{ latest_signal.breakout_time }}</div></div>
                   </div>
                   <div class="help" style="margin-top:10px;">{{ latest_signal.bias_notes }}</div>
                 </div>
@@ -1031,9 +1313,10 @@ def dashboard():
                 <div class=\"metric\"><div class=\"k\">Last Scan</div><div class=\"v\">{{ last_scan_display }}</div></div>
                 <div class=\"metric\"><div class=\"k\">Last Side</div><div class=\"v\">{{ pair_state.last_signal_side or '—' }}</div></div>
                 <div class=\"metric\"><div class=\"k\">Last Signal Time</div><div class=\"v\">{{ last_signal_time_display }}</div></div>
-                <div class=\"metric\"><div class=\"k\">Entry</div><div class=\"v\">{{ active_signal.entry if active_signal else '—' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Indication Layers</div><div class=\"v\">{{ (phase_state.indication_layers|length) if phase_state.indication_layers else 0 }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Entry</div><div class=\"v\">{{ active_signal.entry if active_signal else (phase_state.entry or '—') }}</div></div>
                 <div class=\"metric\"><div class=\"k\">Stop Loss</div><div class=\"v\">{{ active_signal.stop_loss if active_signal else '—' }}</div></div>
-                <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ active_signal.take_profit if active_signal else '—' }}</div></div>
+                <div class=\"metric\"><div class=\"k\">Take Profit</div><div class=\"v\">{{ active_signal.take_profit if active_signal else (phase_state.take_profit or '—') }}</div></div>
               </div>
               {% if pair_state.last_error %}
                 <div class=\"flash error\" style=\"margin-top:12px;\">{{ pair_state.last_error }}</div>

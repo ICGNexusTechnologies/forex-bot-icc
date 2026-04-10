@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timezone
 
-from app import SIGNALS_FILE, STATE_FILE, build_signal_for_pair, load_control, load_json, save_json, send_signal_text, send_text_message
+from app import SIGNALS_FILE, STATE_FILE, build_phase_state_for_pair, build_signal_for_pair, load_control, load_json, save_json, send_signal_text, send_text_message
 
 SCAN_INTERVAL_SECONDS = 60
 
@@ -36,6 +36,7 @@ def main() -> None:
 
         try:
             signal = build_signal_for_pair(control)
+            phase_state = build_phase_state_for_pair(control)
             pair_state = state.get(pair, {}) if isinstance(state.get(pair), dict) else {}
             pair_state.update(
                 {
@@ -53,6 +54,7 @@ def main() -> None:
                     pair_state["last_alerted_signal_time"] = signal.get("detected_at")
             else:
                 pair_state.pop("active_signal", None)
+            pair_state["indication_layers"] = phase_state.get("indication_layers", []) if phase_state else []
             pair_state.pop("last_error", None)
             state[pair] = pair_state
 

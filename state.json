@@ -3,8 +3,57 @@
     "tracking": true,
     "started_at": "2026-04-09T02:21:58.315588Z",
     "last_scan_at": "2026-04-09T17:02:32.096075Z",
-    "last_signal_side": null,
+    "last_signal_side": "BUY",
     "last_signal_time": null,
-    "signal_active": false
+    "signal_active": false,
+    "locked_origin": {
+      "side": "BUY",
+      "origin_price": 212.732,
+      "origin_secondary_price": 212.774,
+      "origin_time": "2026-04-09T03:00:00.000000000Z",
+      "note": "Locked to the confirmed Apr 9 3 AM origin so internal continuations do not reset the setup."
+    },
+    "indication_layers": [
+      {
+        "label": "Primary origin",
+        "kind": "origin",
+        "price": "212.732",
+        "range": "212.732 / 212.774",
+        "level": "212.774",
+        "time": "2026-04-09T03:00:00.000000000Z",
+        "display_time": "Apr 08, 2026 10:00:00 PM",
+        "status": "active"
+      },
+      {
+        "label": "Resistance layer 1",
+        "kind": "resistance",
+        "price": "213.557",
+        "range": "213.557",
+        "level": "213.557",
+        "time": "2026-04-09T15:00:00.000000000Z",
+        "display_time": "Apr 09, 2026 10:00:00 AM",
+        "status": "derived"
+      },
+      {
+        "label": "Resistance layer 2",
+        "kind": "resistance",
+        "price": "213.758",
+        "range": "213.758",
+        "level": "213.758",
+        "time": "2026-04-09T19:00:00.000000000Z",
+        "display_time": "Apr 09, 2026 02:00:00 PM",
+        "status": "derived"
+      },
+      {
+        "label": "Resistance layer 3",
+        "kind": "resistance",
+        "price": "213.998",
+        "range": "213.998",
+        "level": "213.998",
+        "time": "2026-04-10T10:00:00.000000000Z",
+        "display_time": "Apr 10, 2026 05:00:00 AM",
+        "status": "derived"
+      }
+    ]
   }
 }
